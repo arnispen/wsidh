@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS = -O2 -Wall -Wextra -std=c11 -Iinclude -IPQClean-master/common
 LDFLAGS =
 
-WITH_KYBER ?= 0
+override WITH_KYBER := 1
 WITH_AVX2 ?= 0
 WSIDH_PROFILE ?= 0
 WSIDH_VARIANT ?= wsidh512

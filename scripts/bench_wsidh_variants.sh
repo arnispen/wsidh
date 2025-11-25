@@ -36,26 +36,22 @@ for variant in $VARIANTS; do
 $scheme $pk $sk $ct $ss $keygen $encaps $decaps"
 done
 
-printf "\n=== WSIDH Variant Cycle/Size Table ===\n"
-printf "%-10s %8s %8s %8s %8s %14s %14s %14s\n" \
+printf "\n=== WSIDH vs Kyber Cycle/Size Table ===\n"
+printf "%-18s %8s %8s %8s %8s %14s %14s %14s\n" \
        "Scheme" "pk(B)" "sk(B)" "ct(B)" "ss(B)" \
        "keygen cyc" "encaps cyc" "decaps cyc"
 echo "$RESULTS" | while read -r line; do
     [ -z "$line" ] && continue
     set -- $line
-    printf "%-10s %8s %8s %8s %8s %14.2f %14.2f %14.2f\n" \
+    printf "%-18s %8s %8s %8s %8s %14.2f %14.2f %14.2f\n" \
            "$1" "$2" "$3" "$4" "$5" "$6" "$7" "$8"
 done
 
-printf "\n=== Kyber Reference (cycles provided by submitters) ===\n"
-printf "%-10s %8s %8s %8s %8s %14s %14s %14s\n" \
-       "Scheme" "pk(B)" "sk(B)" "ct(B)" "ss(B)" \
-       "keygen cyc" "encaps cyc" "decaps cyc"
-printf "%-10s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
+printf "%-18s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
        "Kyber512" 800 1632 768 32 20000 28000 38000
-printf "%-10s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
+printf "%-18s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
        "Kyber768" 1184 2400 1088 32 30000 40000 55000
-printf "%-10s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
+printf "%-18s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
        "Kyber1024" 1568 3168 1568 32 40000 55000 70000
 
 printf "\nRestoring WSIDH variant %s (WITH_AVX2=%s, WITH_KYBER=%s)\n" \
