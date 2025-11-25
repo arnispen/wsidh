@@ -2,6 +2,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdatomic.h>
 
 #include "wsidh_kem.h"
 #include "poly.h"
@@ -9,12 +10,26 @@
 #include "ntt.h"
 #include "wsidh_profiler.h"
 #include "fips202.h"
+#ifdef WSIDH_USE_AVX2
+#include "wsidh_avx2_paths.h"
+#include WSIDH_AVX2_HEADER(fips202x4.h)
+#endif
 
 static void ensure_cached_wave(void);
 static void cached_wave_poly(poly *a_out);
 static poly cached_wave_time;
 static int16_t cached_wave_ntt[WSIDH_N];
 static int cached_wave_ready = 0;
+#define WSIDH_MAX_HASH_INPUT (WSIDH_CT_BYTES + WSIDH_SK_Z_BYTES + WSIDH_SS_BYTES + 4)
+#define WSIDH_COINS_DOMAIN 0x5A
+#define WSIDH_KDF_DOMAIN_GOOD 0xA0
+#define WSIDH_KDF_DOMAIN_BAD  0xA1
+#define WSIDH_KDF_DOMAIN_DUMMY0 0x7C
+#define WSIDH_KDF_DOMAIN_DUMMY1 0xA3
+#ifdef WSIDH_USE_AVX2
+#define WSIDH_MAX_SAMPLE_BYTES \
+    ((((2 * WSIDH_N) + SHAKE128_RATE - 1) / SHAKE128_RATE) * SHAKE128_RATE)
+#endif
 
 /*
  * Secret-key layout (see include/wsidh_kem.h for the exported byte lengths):
@@ -84,11 +99,9 @@ static void poly_from_bytes(poly *p, const uint8_t *in) {
 }
 
 static void poly_compress12(uint8_t *out, const poly *p) {
-    poly tmp = *p;
-    poly_canon(&tmp);
     for (int i = 0, j = 0; i < WSIDH_N; i += 2, j += 3) {
-        uint16_t t0 = (uint16_t)tmp.coeffs[i];
-        uint16_t t1 = (uint16_t)tmp.coeffs[i + 1];
+        uint16_t t0 = (uint16_t)p->coeffs[i];
+        uint16_t t1 = (uint16_t)p->coeffs[i + 1];
         out[j] = (uint8_t)(t0 & 0xFF);
         out[j + 1] = (uint8_t)(((t0 >> 8) & 0x0F) | ((t1 & 0x0F) << 4));
         out[j + 2] = (uint8_t)(t1 >> 4);
@@ -104,28 +117,72 @@ static void poly_decompress12(poly *p, const uint8_t *in) {
     }
 }
 
+#ifndef WSIDH_DISABLE_PK_HASH_CACHE
+typedef struct {
+    uint8_t pk[WSIDH_PK_BYTES];
+    uint8_t hash[WSIDH_PK_HASH_BYTES];
+    atomic_flag lock;
+    int valid;
+} wsidh_pk_hash_cache_t;
+
+static wsidh_pk_hash_cache_t g_pk_hash_cache = {
+    .lock = ATOMIC_FLAG_INIT,
+    .valid = 0,
+};
+
+static void wsidh_hash_pk_cached(uint8_t *out, const uint8_t *pk) {
+    if (!out || !pk) return;
+    while (atomic_flag_test_and_set_explicit(&g_pk_hash_cache.lock, memory_order_acquire)) {
+        ; // spin
+    }
+    if (g_pk_hash_cache.valid &&
+        memcmp(g_pk_hash_cache.pk, pk, WSIDH_PK_BYTES) == 0) {
+        memcpy(out, g_pk_hash_cache.hash, WSIDH_PK_HASH_BYTES);
+        atomic_flag_clear_explicit(&g_pk_hash_cache.lock, memory_order_release);
+        return;
+    }
+    wsidh_sha3_256(out, pk, WSIDH_PK_BYTES);
+    memcpy(g_pk_hash_cache.pk, pk, WSIDH_PK_BYTES);
+    memcpy(g_pk_hash_cache.hash, out, WSIDH_PK_HASH_BYTES);
+    g_pk_hash_cache.valid = 1;
+    atomic_flag_clear_explicit(&g_pk_hash_cache.lock, memory_order_release);
+}
+#else
+static void wsidh_hash_pk_cached(uint8_t *out, const uint8_t *pk) {
+    wsidh_sha3_256(out, pk, WSIDH_PK_BYTES);
+}
+#endif
+
 static void load_pk(const uint8_t *pk,
                     poly *a,
                     poly *b,
                     poly *a_ntt,
-                    poly *b_ntt) {
+                    poly *b_ntt,
+                    const uint8_t *pk_hash_opt) {
+    (void)pk_hash_opt;
     cached_wave_poly(a);
-    poly_decompress12(b, pk);
+    if (b) {
+        poly_decompress12(b, pk);
+    }
+    if (b_ntt) {
+        poly_decompress12(b_ntt, pk + WSIDH_POLY_COMPRESSED_BYTES);
+    }
     if (a_ntt) {
         ensure_cached_wave();
         for (int i = 0; i < WSIDH_N; i++) {
             a_ntt->coeffs[i] = cached_wave_ntt[i];
         }
     }
-    if (b_ntt) {
-        *b_ntt = *b;
-        ntt(b_ntt->coeffs);
-    }
 }
 
-static void store_pk(uint8_t *pk, const poly *a, const poly *b) {
+static void store_pk(uint8_t *pk, const poly *a, const poly *b, const poly *b_ntt) {
     (void)a;
-    poly_compress12(pk, b);
+    poly canonical_b = *b;
+    poly_canon(&canonical_b);
+    poly_compress12(pk, &canonical_b);
+    poly canonical_ntt = *b_ntt;
+    poly_canon(&canonical_ntt);
+    poly_compress12(pk + WSIDH_POLY_COMPRESSED_BYTES, &canonical_ntt);
 }
 
 static void load_ct(const uint8_t *ct, poly *u, poly *v) {
@@ -282,6 +339,55 @@ static void poly_to_msg(uint8_t *msg, const poly *p) {
 /* ============================================================
    Deterministic expansion helpers (FO coins -> r,e1,e2)
    ============================================================ */
+#ifdef WSIDH_USE_AVX2
+static void sample_multi_from_seed_x4(poly **polys,
+                                      const int *bounds,
+                                      size_t count,
+                                      const uint8_t seed[WSIDH_SEED_BYTES],
+                                      uint8_t domain_tag) {
+    if (!polys || !bounds || count == 0 || count > 3) {
+        return;
+    }
+    uint8_t lane_inputs[4][WSIDH_SEED_BYTES + 2];
+    for (size_t lane = 0; lane < 4; lane++) {
+        memcpy(lane_inputs[lane], seed, WSIDH_SEED_BYTES);
+        lane_inputs[lane][WSIDH_SEED_BYTES] = domain_tag;
+        lane_inputs[lane][WSIDH_SEED_BYTES + 1] = (uint8_t)lane;
+    }
+
+    keccakx4_state state;
+    PQCLEAN_MLKEM512_AVX2_shake128x4_absorb_once(&state,
+            lane_inputs[0], lane_inputs[1],
+            lane_inputs[2], lane_inputs[3],
+            sizeof lane_inputs[0]);
+
+    size_t lane_need[4] = {0};
+    size_t max_need = 0;
+    for (size_t lane = 0; lane < count; lane++) {
+        lane_need[lane] = wsidh_sample_bytes_required(bounds[lane]);
+        if (lane_need[lane] > max_need) {
+            max_need = lane_need[lane];
+        }
+    }
+    size_t blocks = (max_need + SHAKE128_RATE - 1) / SHAKE128_RATE;
+    if (blocks == 0) {
+        blocks = 1;
+    }
+
+    uint8_t lane_buf[4][WSIDH_MAX_SAMPLE_BYTES];
+    memset(lane_buf, 0, sizeof(lane_buf));
+    PQCLEAN_MLKEM512_AVX2_shake128x4_squeezeblocks(
+        lane_buf[0], lane_buf[1], lane_buf[2], lane_buf[3],
+        blocks, &state);
+
+    for (size_t lane = 0; lane < count; lane++) {
+        wsidh_sample_from_bytes(polys[lane],
+                                lane_buf[lane],
+                                bounds[lane]);
+    }
+}
+#endif
+
 static void shake_seed_stream(shake128incctx *ctx,
                               const uint8_t seed[WSIDH_SEED_BYTES],
                               uint8_t domain_tag) {
@@ -309,11 +415,17 @@ static void sample_pair_from_seed(poly *p0,
                                   const uint8_t seed[WSIDH_SEED_BYTES],
                                   uint8_t domain_tag) {
     WSIDH_PROFILE_BEGIN(sample_pair_scope, WSIDH_PROFILE_EVENT_SAMPLE_DET);
+#ifdef WSIDH_USE_AVX2
+    poly *polys[2] = {p0, p1};
+    int bounds[2] = {bound0, bound1};
+    sample_multi_from_seed_x4(polys, bounds, 2, seed, domain_tag);
+#else
     shake128incctx ctx;
     shake_seed_stream(&ctx, seed, domain_tag);
     sample_poly_from_ctx(p0, bound0, &ctx);
     sample_poly_from_ctx(p1, bound1, &ctx);
     shake128_inc_ctx_release(&ctx);
+#endif
     WSIDH_PROFILE_END(sample_pair_scope);
 }
 
@@ -326,12 +438,18 @@ static void sample_triple_from_seed(poly *p0,
                                     const uint8_t seed[WSIDH_SEED_BYTES],
                                     uint8_t domain_tag) {
     WSIDH_PROFILE_BEGIN(sample_triple_scope, WSIDH_PROFILE_EVENT_SAMPLE_DET);
+#ifdef WSIDH_USE_AVX2
+    poly *polys[3] = {p0, p1, p2};
+    int bounds[3] = {bound0, bound1, bound2};
+    sample_multi_from_seed_x4(polys, bounds, 3, seed, domain_tag);
+#else
     shake128incctx ctx;
     shake_seed_stream(&ctx, seed, domain_tag);
     sample_poly_from_ctx(p0, bound0, &ctx);
     sample_poly_from_ctx(p1, bound1, &ctx);
     sample_poly_from_ctx(p2, bound2, &ctx);
     shake128_inc_ctx_release(&ctx);
+#endif
     WSIDH_PROFILE_END(sample_triple_scope);
 }
 
@@ -348,21 +466,89 @@ static void expand_deterministic(poly *r,
 static void coins_from_msg(uint8_t *coins,
                            const uint8_t *msg,
                            const uint8_t *pk_hash) {
-    sha3_256incctx ctx;
-    sha3_256_inc_init(&ctx);
-    sha3_256_inc_absorb(&ctx, msg, WSIDH_SS_BYTES);
-    sha3_256_inc_absorb(&ctx, pk_hash, WSIDH_PK_HASH_BYTES);
-    sha3_256_inc_finalize(coins, &ctx);
+    uint8_t input[WSIDH_SS_BYTES + WSIDH_PK_HASH_BYTES + 1];
+    memcpy(input, msg, WSIDH_SS_BYTES);
+    memcpy(input + WSIDH_SS_BYTES, pk_hash, WSIDH_PK_HASH_BYTES);
+    input[WSIDH_SS_BYTES + WSIDH_PK_HASH_BYTES] = WSIDH_COINS_DOMAIN;
+    wsidh_shake256(coins, WSIDH_SEED_BYTES, input, sizeof(input));
 }
 
-static void hash_key(uint8_t *out,
-                     const uint8_t *secret,
-                     size_t secret_len,
-                     const uint8_t *ct) {
-    uint8_t buf[WSIDH_CT_BYTES + WSIDH_SS_BYTES];
-    memcpy(buf, secret, secret_len);
-    memcpy(buf + secret_len, ct, WSIDH_CT_BYTES);
-    wsidh_sha3_256(out, buf, secret_len + WSIDH_CT_BYTES);
+static void hash_key_from_parts(uint8_t *out,
+                                const uint8_t *ct,
+                                const uint8_t *secret,
+                                size_t secret_len,
+                                uint8_t domain_tag) {
+    if (!secret || !ct || !out) return;
+    const size_t max_len = WSIDH_MAX_HASH_INPUT;
+    uint8_t buf[WSIDH_MAX_HASH_INPUT];
+    size_t offset = 0;
+    size_t copy_secret = secret_len > max_len ? max_len : secret_len;
+    memcpy(buf + offset, secret, copy_secret);
+    offset += copy_secret;
+    size_t remaining = (offset < max_len) ? (max_len - offset) : 0;
+    size_t copy_ct = WSIDH_CT_BYTES > remaining ? remaining : WSIDH_CT_BYTES;
+    memcpy(buf + offset, ct, copy_ct);
+    offset += copy_ct;
+    if (offset < max_len) {
+        buf[offset++] = domain_tag;
+    }
+    wsidh_shake256(out, WSIDH_SS_BYTES, buf, offset);
+}
+
+static void hash_key_dual(uint8_t *good_out,
+                          uint8_t *bad_out,
+                          const uint8_t *ct,
+                          const uint8_t *good_secret,
+                          size_t good_len,
+                          const uint8_t *bad_secret,
+                          size_t bad_len) {
+#ifdef WSIDH_USE_AVX2
+    if (good_secret && bad_secret &&
+        good_len == bad_len &&
+        good_len + WSIDH_CT_BYTES + 1 <= WSIDH_MAX_HASH_INPUT) {
+        WSIDH_PROFILE_BEGIN(hash_dual_scope, WSIDH_PROFILE_EVENT_SHA3);
+        size_t lane_len = good_len + WSIDH_CT_BYTES + 1;
+        uint8_t lane_inputs[4][WSIDH_MAX_HASH_INPUT];
+        memset(lane_inputs, 0, sizeof(lane_inputs));
+
+        size_t offset = 0;
+        memcpy(lane_inputs[0], good_secret, good_len);
+        offset = good_len;
+        memcpy(lane_inputs[0] + offset, ct, WSIDH_CT_BYTES);
+        offset += WSIDH_CT_BYTES;
+        lane_inputs[0][offset] = WSIDH_KDF_DOMAIN_GOOD;
+
+        offset = 0;
+        memcpy(lane_inputs[1], bad_secret, bad_len);
+        offset = bad_len;
+        memcpy(lane_inputs[1] + offset, ct, WSIDH_CT_BYTES);
+        offset += WSIDH_CT_BYTES;
+        lane_inputs[1][offset] = WSIDH_KDF_DOMAIN_BAD;
+
+        memcpy(lane_inputs[2], lane_inputs[1], lane_len);
+        lane_inputs[2][lane_len - 1] = WSIDH_KDF_DOMAIN_DUMMY0;
+        memcpy(lane_inputs[3], lane_inputs[1], lane_len);
+        lane_inputs[3][lane_len - 1] = WSIDH_KDF_DOMAIN_DUMMY1;
+
+        uint8_t dummy2[WSIDH_SS_BYTES];
+        uint8_t dummy3[WSIDH_SS_BYTES];
+
+        PQCLEAN_MLKEM512_AVX2_shake256x4(good_out,
+                                         bad_out,
+                                         dummy2,
+                                         dummy3,
+                                         WSIDH_SS_BYTES,
+                                         lane_inputs[0],
+                                         lane_inputs[1],
+                                         lane_inputs[2],
+                                         lane_inputs[3],
+                                         lane_len);
+        WSIDH_PROFILE_END(hash_dual_scope);
+        return;
+    }
+#endif
+    hash_key_from_parts(good_out, ct, good_secret, good_len, WSIDH_KDF_DOMAIN_GOOD);
+    hash_key_from_parts(bad_out, ct, bad_secret, bad_len, WSIDH_KDF_DOMAIN_BAD);
 }
 
 /* ============================================================
@@ -455,6 +641,7 @@ static void wsidh_decrypt(poly *out,
 int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     WSIDH_PROFILE_BEGIN(keygen_scope, WSIDH_PROFILE_EVENT_KEYGEN);
     poly a, b, s, e, tmp;
+    poly b_ntt_poly;
     poly s_ntt_poly;
     int16_t s_ntt_arr[WSIDH_N];
     rand_func_t rng = default_rng;
@@ -475,8 +662,11 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     poly_mul_with_cached_wave_from_ntt(&tmp, s_ntt_arr);
     poly_add(&b, &tmp, &e);
     poly_canon(&b);
+    b_ntt_poly = b;
+    ntt(b_ntt_poly.coeffs);
+    poly_canon(&b_ntt_poly);
 
-    store_pk(pk, &a, &b);
+    store_pk(pk, &a, &b, &b_ntt_poly);
     poly_to_bytes(sk + SK_S_OFFSET, &s);
     poly_to_bytes(sk + SK_SNTT_OFFSET, &s_ntt_poly);
     memcpy(sk + SK_PK_OFFSET, pk, WSIDH_PK_BYTES);
@@ -500,8 +690,8 @@ int wsidh_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
         return -1;
     }
 
-    load_pk(pk, &a, &b, &a_ntt_poly, &b_ntt_poly);
-    wsidh_sha3_256(pk_hash_local, pk, WSIDH_PK_BYTES);
+    wsidh_hash_pk_cached(pk_hash_local, pk);
+    load_pk(pk, &a, &b, &a_ntt_poly, &b_ntt_poly, pk_hash_local);
 
     rng(msg, sizeof(msg));
     coins_from_msg(coins, msg, pk_hash_local);
@@ -509,7 +699,7 @@ int wsidh_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
     wsidh_encrypt(&u, &v, &a, &b, &a_ntt_poly, &b_ntt_poly, msg, coins);
     store_ct(ct, &u, &v);
 
-    hash_key(ss, msg, sizeof(msg), ct);
+    hash_key_from_parts(ss, ct, msg, sizeof(msg), WSIDH_KDF_DOMAIN_GOOD);
     WSIDH_PROFILE_END(enc_scope);
     return 0;
 }
@@ -534,12 +724,12 @@ int wsidh_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
     }
 
     const uint8_t *pk_cached = sk + SK_PK_OFFSET;
-    load_pk(pk_cached, &a_re, &b_re, &a_ntt_re, &b_ntt_re);
+    const uint8_t *pk_hash_cached = sk + SK_PK_HASH_OFFSET;
+    load_pk(pk_cached, &a_re, &b_re, &a_ntt_re, &b_ntt_re, pk_hash_cached);
 
     wsidh_decrypt(&diff_poly, &u, &v, &s, s_ntt_arr);
     poly_to_msg(msg_prime, &diff_poly);
 
-    const uint8_t *pk_hash_cached = sk + SK_PK_HASH_OFFSET;
     coins_from_msg(coins, msg_prime, pk_hash_cached);
     wsidh_encrypt(&u_re, &v_re, &a_re, &b_re, &a_ntt_re, &b_ntt_re, msg_prime, coins);
 
@@ -550,8 +740,9 @@ int wsidh_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
     uint8_t good_key[WSIDH_SS_BYTES];
     uint8_t bad_key[WSIDH_SS_BYTES];
 
-    hash_key(good_key, msg_prime, sizeof(msg_prime), ct);
-    hash_key(bad_key, sk + SK_Z_OFFSET, WSIDH_SK_Z_BYTES, ct);
+    hash_key_dual(good_key, bad_key, ct,
+                  msg_prime, sizeof(msg_prime),
+                  sk + SK_Z_OFFSET, WSIDH_SK_Z_BYTES);
 
     ct_select(ss, good_key, bad_key, WSIDH_SS_BYTES, fail);
 

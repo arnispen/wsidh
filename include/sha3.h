@@ -8,5 +8,7 @@
 void wsidh_sha3_256(uint8_t *out, const uint8_t *in, size_t inlen);
 void wsidh_shake128(uint8_t *out, size_t outlen,
                     const uint8_t *in, size_t inlen);
+void wsidh_shake256(uint8_t *out, size_t outlen,
+                    const uint8_t *in, size_t inlen);
 
 #endif

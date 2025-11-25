@@ -16,7 +16,9 @@ typedef struct {
 } bench_result_t;
 
 static int summary_mode = 0;
-static int run_all_variants = 0;
+static int variants_mode = 0;
+static int variants_only_mode = 0;
+static int variant_child_mode = 0;
 
 #ifdef WSIDH_ENABLE_KYBER
 typedef struct {
@@ -33,6 +35,18 @@ typedef struct {
 static void print_combined_table(const kem_stats_t *wsidh,
                                  const kem_stats_t *kybers,
                                  size_t count);
+#endif
+
+#ifdef WSIDH_ENABLE_KYBER
+static const int wsidh_builds_with_kyber = 1;
+#else
+static const int wsidh_builds_with_kyber = 0;
+#endif
+
+#ifdef WSIDH_USE_AVX2
+static const int wsidh_builds_with_avx2 = 1;
+#else
+static const int wsidh_builds_with_avx2 = 0;
 #endif
 
 static inline uint64_t rdtsc(void) {
@@ -251,33 +265,63 @@ static void print_kyber_placeholders(void) {
 #endif
 
 #ifdef WSIDH_ENABLE_KYBER
+#if defined(WSIDH_USE_AVX2)
+#include "../third_party/PQClean/crypto_kem/kyber512/avx2/api.h"
+#include "../third_party/PQClean/crypto_kem/kyber768/avx2/api.h"
+#include "../third_party/PQClean/crypto_kem/kyber1024/avx2/api.h"
+#define KYBER512_NAME "Kyber512-AVX2"
+#define KYBER768_NAME "Kyber768-AVX2"
+#define KYBER1024_NAME "Kyber1024-AVX2"
+#define KYBER512_PUBLICKEYBYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_PUBLICKEYBYTES
+#define KYBER512_SECRETKEYBYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_SECRETKEYBYTES
+#define KYBER512_CIPHERTEXTBYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_CIPHERTEXTBYTES
+#define KYBER512_BYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_BYTES
+#define KYBER768_PUBLICKEYBYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_PUBLICKEYBYTES
+#define KYBER768_SECRETKEYBYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_SECRETKEYBYTES
+#define KYBER768_CIPHERTEXTBYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_CIPHERTEXTBYTES
+#define KYBER768_BYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_BYTES
+#define KYBER1024_PUBLICKEYBYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_PUBLICKEYBYTES
+#define KYBER1024_SECRETKEYBYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_SECRETKEYBYTES
+#define KYBER1024_CIPHERTEXTBYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_CIPHERTEXTBYTES
+#define KYBER1024_BYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_BYTES
+#define kyber512_crypto_kem_keypair PQCLEAN_MLKEM512_AVX2_crypto_kem_keypair
+#define kyber512_crypto_kem_enc PQCLEAN_MLKEM512_AVX2_crypto_kem_enc
+#define kyber512_crypto_kem_dec PQCLEAN_MLKEM512_AVX2_crypto_kem_dec
+#define kyber768_crypto_kem_keypair PQCLEAN_MLKEM768_AVX2_crypto_kem_keypair
+#define kyber768_crypto_kem_enc PQCLEAN_MLKEM768_AVX2_crypto_kem_enc
+#define kyber768_crypto_kem_dec PQCLEAN_MLKEM768_AVX2_crypto_kem_dec
+#define kyber1024_crypto_kem_keypair PQCLEAN_MLKEM1024_AVX2_crypto_kem_keypair
+#define kyber1024_crypto_kem_enc PQCLEAN_MLKEM1024_AVX2_crypto_kem_enc
+#define kyber1024_crypto_kem_dec PQCLEAN_MLKEM1024_AVX2_crypto_kem_dec
+#else
 #include "../third_party/PQClean/crypto_kem/kyber512/clean/api.h"
+#include "../third_party/PQClean/crypto_kem/kyber768/clean/api.h"
+#include "../third_party/PQClean/crypto_kem/kyber1024/clean/api.h"
+#define KYBER512_NAME "Kyber512"
+#define KYBER768_NAME "Kyber768"
+#define KYBER1024_NAME "Kyber1024"
 #define KYBER512_PUBLICKEYBYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_PUBLICKEYBYTES
 #define KYBER512_SECRETKEYBYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_SECRETKEYBYTES
 #define KYBER512_CIPHERTEXTBYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_CIPHERTEXTBYTES
 #define KYBER512_BYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES
-
-#include "../third_party/PQClean/crypto_kem/kyber768/clean/api.h"
 #define KYBER768_PUBLICKEYBYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_PUBLICKEYBYTES
 #define KYBER768_SECRETKEYBYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_SECRETKEYBYTES
 #define KYBER768_CIPHERTEXTBYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_CIPHERTEXTBYTES
 #define KYBER768_BYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_BYTES
-
-#include "../third_party/PQClean/crypto_kem/kyber1024/clean/api.h"
 #define KYBER1024_PUBLICKEYBYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_PUBLICKEYBYTES
 #define KYBER1024_SECRETKEYBYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_SECRETKEYBYTES
 #define KYBER1024_CIPHERTEXTBYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_CIPHERTEXTBYTES
 #define KYBER1024_BYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_BYTES
-
-int PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair(uint8_t *, uint8_t *);
-int PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc(uint8_t *, uint8_t *, const uint8_t *);
-int PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec(uint8_t *, const uint8_t *, const uint8_t *);
-int PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair(uint8_t *, uint8_t *);
-int PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc(uint8_t *, uint8_t *, const uint8_t *);
-int PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec(uint8_t *, const uint8_t *, const uint8_t *);
-int PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair(uint8_t *, uint8_t *);
-int PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc(uint8_t *, uint8_t *, const uint8_t *);
-int PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec(uint8_t *, const uint8_t *, const uint8_t *);
+#define kyber512_crypto_kem_keypair PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair
+#define kyber512_crypto_kem_enc PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc
+#define kyber512_crypto_kem_dec PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec
+#define kyber768_crypto_kem_keypair PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair
+#define kyber768_crypto_kem_enc PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc
+#define kyber768_crypto_kem_dec PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec
+#define kyber1024_crypto_kem_keypair PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair
+#define kyber1024_crypto_kem_enc PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc
+#define kyber1024_crypto_kem_dec PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec
+#endif
 
 typedef struct {
     const char *name;
@@ -389,7 +433,20 @@ static int run_variant_script(size_t trials) {
     }
     printf("Launching WSIDH variant sweep via scripts/bench_wsidh_variants.sh (trials=%zu)\n",
            trials);
+    const char *child_env = getenv("WSIDH_VARIANT_CHILD");
+    setenv("WSIDH_VARIANT_CHILD", "1", 1);
+    setenv("WSIDH_BENCH_WITH_KYBER",
+           wsidh_builds_with_kyber ? "1" : "0", 1);
+    setenv("WSIDH_BENCH_WITH_AVX2",
+           wsidh_builds_with_avx2 ? "1" : "0", 1);
     int rc = system(cmd);
+    if (child_env) {
+        setenv("WSIDH_VARIANT_CHILD", child_env, 1);
+    } else {
+        unsetenv("WSIDH_VARIANT_CHILD");
+    }
+    unsetenv("WSIDH_BENCH_WITH_KYBER");
+    unsetenv("WSIDH_BENCH_WITH_AVX2");
     if (rc != 0) {
         fprintf(stderr, "Variant sweep failed (exit=%d)\n", rc);
         return rc;
@@ -405,7 +462,12 @@ int main(int argc, char **argv) {
             continue;
         }
         if (strcmp(argv[i], "--variants") == 0) {
-            run_all_variants = 1;
+            variants_mode = 1;
+            continue;
+        }
+        if (strcmp(argv[i], "--variants-only") == 0) {
+            variants_mode = 1;
+            variants_only_mode = 1;
             continue;
         }
         long custom = strtol(argv[i], NULL, 10);
@@ -414,7 +476,9 @@ int main(int argc, char **argv) {
         }
     }
 
-    if (run_all_variants) {
+    variant_child_mode = getenv("WSIDH_VARIANT_CHILD") != NULL;
+
+    if (variants_only_mode) {
         return run_variant_script(trials);
     }
 
@@ -465,30 +529,30 @@ int main(int argc, char **argv) {
         .dec = dec,
     };
     const kyber_target_t kyber_targets[] = {
-        {"Kyber512",
+        {KYBER512_NAME,
          KYBER512_PUBLICKEYBYTES,
          KYBER512_SECRETKEYBYTES,
          KYBER512_CIPHERTEXTBYTES,
          KYBER512_BYTES,
-         PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair,
-         PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc,
-         PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec},
-        {"Kyber768",
+         kyber512_crypto_kem_keypair,
+         kyber512_crypto_kem_enc,
+         kyber512_crypto_kem_dec},
+        {KYBER768_NAME,
          KYBER768_PUBLICKEYBYTES,
          KYBER768_SECRETKEYBYTES,
          KYBER768_CIPHERTEXTBYTES,
          KYBER768_BYTES,
-         PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair,
-         PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc,
-         PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec},
-        {"Kyber1024",
+         kyber768_crypto_kem_keypair,
+         kyber768_crypto_kem_enc,
+         kyber768_crypto_kem_dec},
+        {KYBER1024_NAME,
          KYBER1024_PUBLICKEYBYTES,
          KYBER1024_SECRETKEYBYTES,
          KYBER1024_CIPHERTEXTBYTES,
          KYBER1024_BYTES,
-         PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair,
-         PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc,
-         PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec},
+         kyber1024_crypto_kem_keypair,
+         kyber1024_crypto_kem_enc,
+         kyber1024_crypto_kem_dec},
     };
 
     printf("=== Kyber Comparison (trials=%zu) ===\n", trials);
@@ -501,6 +565,13 @@ int main(int argc, char **argv) {
 #else
     print_kyber_placeholders();
 #endif
+
+    if (!summary_mode && variants_mode && !variant_child_mode) {
+        int vrc = run_variant_script(trials);
+        if (vrc != 0) {
+            return vrc;
+        }
+    }
 
     return 0;
 }

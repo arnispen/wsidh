@@ -2,32 +2,46 @@
 
 WSIDH is a research-grade, RLWE-style key-encapsulation mechanism that mixes a deterministically generated “wave-based” public polynomial `a(x)` with NTT-accelerated polynomial arithmetic. This repository hardens the reference into a Fujisaki–Okamoto (FO) CCA-secure KEM and provides a full benchmarking and testing harness so we can track competitiveness against Kyber.
 
+## Specification Snapshot
+
+| Variant   | Degree `N` | Modulus `q` | `BOUND_S` | `BOUND_E` | pk bytes | sk bytes | ct bytes | ss bytes |
+|-----------|------------|-------------|-----------|-----------|---------:|---------:|---------:|---------:|
+| WSIDH512  | 256        | 3329        | 3         | 2         |      768 |     1856 |      768 |       32 |
+| WSIDH768* | 256        | 3329        | 4         | 3         |      768 |     1856 |      768 |       32 |
+| WSIDH1024*| 256        | 3329        | 5         | 4         |      768 |     1856 |      768 |       32 |
+
+\*WSIDH768/WSIDH1024 widen the noise bounds while sharing the same `N=256` NTT today; treat them as experimental presets until the dimension is lifted.
+
 ## Parameters & Tunability
 
-Variant definitions now live in `include/wsidh_variants.h` and feed the classic macros exported from `include/params.h`. Three presets match Kyber’s 512/768/1024 structure:
+Variant definitions now live in `include/wsidh_variants.h` and feed the macros exported from `include/params.h`. Pick a preset by passing `WSIDH_VARIANT` into `make`, e.g. `make WSIDH_VARIANT=wsidh768 wsidh_bench`. The build stamps `WSIDH_PARAM_SET`, which drives the degree, modulus, bounds, and byte sizes throughout the tree. Every time you touch a preset, rebuild and rerun the 10k-trial Monte Carlo in `wsidh_test` to verify the decoding failure rate stays negligible.
 
-- `WSIDH512` (default) keeps `N=256`, `q=3329`, `BOUND_S=3`, `BOUND_E=2`.
-- `WSIDH768` / `WSIDH1024` currently reuse the same NTT (still `N=256`, `q=3329`) but widen the noise bounds (documented as experimental until the NTT generalizes past 256 points). Each entry is tracked in `wsidh_known_variants`.
-- `WSIDH_SEED_BYTES = 32` keeps deterministic samplers SHA3-friendly for every preset.
+### API & Byte Layout
 
-Select a preset by passing `WSIDH_VARIANT` into `make`, e.g. `make WSIDH_VARIANT=wsidh768 wsidh_bench`. Under the hood the build stamps `WSIDH_PARAM_SET` so all serialization constants stay self-consistent. Every time you tweak a parameter set, rebuild and rerun the 10k trial in `wsidh_test` to confirm the empirical failure rate is still negligible.
+Public callers use the standard NIST PQC KEM API:
 
-### Serialization & Bandwidth
+```
+int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk);
+int wsidh_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk);
+int wsidh_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk);
+```
 
-A fresh keypair now serializes as:
+Serialization is fixed:
 
-- `pk = compress_12(b)` → `384` bytes
-- `sk = s || s_ntt || pk || H(pk) || z` → `1472` bytes
-- `ct = compress_12(u) || compress_12(v)` → `768` bytes
-- `ss = 32` bytes
+- `pk = compress_12(b) || compress_12(b_ntt)` (768 bytes). The deterministic wave polynomial `a(x)` is regenerated locally, so the public key ships both `b` (time domain) and its NTT so encaps/decap never re-run that NTT.
+- `ct = compress_12(u) || compress_12(v)` (768 bytes). Two 12-bit coefficients are packed into three bytes exactly like Kyber.
+- `sk = s || s_ntt || pk || H(pk) || z` (1472 bytes). Both `s` and its NTT share the raw 16-bit layout to keep FO re-encryption fast. `z` is a 32-byte fallback secret.
+- `ss = 32` bytes derived as `SHA3-256(secret || ct)` on either the valid or fallback branch.
 
-We reuse Kyber’s trick of packing two coefficients (each < 4096) into three bytes, so every public polynomial costs 12 bits per coefficient. Because the wave polynomial `a(x)` is deterministic, the public key only needs `b(x)`; the receiver regenerates `a(x)` (and its cached NTT) locally. The new layout therefore beats Kyber512 on every bandwidth metric while keeping the FO transform untouched.
+All of these helpers live in `wsidh_kem.c` and the byte lengths are exposed via macros in `include/wsidh_kem.h`, so downstream code never guesses the layout.
+
+Profiling (per-function breakdowns) is optional: set `WSIDH_PROFILE=1` when invoking `make` to enable the instrumentation; otherwise it compiles out for accurate cycle counts.
 
 ## Mathematical Background
 
 ### Ring structure
 
-WSIDH works over the cyclotomic ring `R_q = Z_q[x]/(x^N + 1)` with `N = 2^k` so that the negacyclic Number-Theoretic Transform (NTT) exists. Vectors of coefficients are interpreted as ring elements, and all polynomial multiplications are performed as point-wise products in the NTT domain. The chosen primes (currently `q = 12289`) satisfy `q ≡ 1 (mod 2N)` so that a primitive `2N`-th root of unity `ψ` exists; we precompute both `ψ` powers and their inverses for fast forward and inverse NTT passes.
+WSIDH works over the cyclotomic ring `R_q = Z_q[x]/(x^N + 1)` with `N = 2^k` so that the negacyclic Number-Theoretic Transform (NTT) exists. Vectors of coefficients are interpreted as ring elements, and all polynomial multiplications are performed as point-wise products in the NTT domain. The chosen primes (currently `q = 3329`) satisfy `q ≡ 1 (mod 2N)` so that a primitive `2N`-th root of unity `ψ` exists; we precompute both `ψ` powers and their inverses for fast forward and inverse NTT passes.
 
 ### Deterministic wave polynomial
 
@@ -72,7 +86,13 @@ Every helper that depends on secrets is constant-time: comparisons use XOR reduc
 - Both encaps and decaps hash the exact concatenation `secret || ct` when deriving the final shared key. Any mismatch falls back to the `z` secret stored in `sk`.
 - Ciphertexts are `(u, v)` serialized as two polynomials; no ad-hoc metadata leaks validity bits.
 
-## Building & Testing
+## Build Profiles & Testing
+
+`make` variables control the build matrix:
+
+- `WSIDH_VARIANT` — selects WSIDH512/768/1024 at compile time (default `wsidh512`).
+- `WITH_AVX2=1` — enables the AVX2 NTT path (WSIDH uses PQClean’s kernels; Kyber, when linked, does as well).
+- `WITH_KYBER=1` — links PQClean’s Kyber implementations so the benchmark can time them directly.
 
 ```
 make wsidh_test
@@ -85,38 +105,27 @@ make wsidh_test
 
 ```
 make wsidh_bench
-./wsidh_bench        # defaults to 1000 trials
-./wsidh_bench 50     # override trial count when iterating quickly
-./wsidh_bench --summary   # single-line machine-readable output (used by scripts)
+./wsidh_bench             # defaults to 1000 trials for the active variant
+./wsidh_bench 200         # override the trial count
+./wsidh_bench --summary   # single-line output (used by the variant sweep)
+./wsidh_bench --variants 200        # measure current variant + WSIDH512/768/1024 table
+./wsidh_bench --variants-only 200   # only print the WSIDH table
 ```
 
 The benchmark reports average cycles, wall-clock nanoseconds, and derived operations-per-second for key generation, encapsulation, and decapsulation. `rdtsc` is used when running on x86; other architectures still get wall-clock statistics. Each phase now also prints a per-function breakdown (keygen, `poly_from_wave`, NTTs, samplers, SHA3 calls) using the built-in profiler, followed by micro-benchmarks for `poly_mul_ntt`, both samplers, and SHA3-256. Pass a smaller trial count when iterating locally, then bump back to ≥1000 for publication-quality numbers. When Kyber isn’t linked, the harness appends the official Kyber512/768/1024 cycle counts you supplied so we can eyeball the gap even before integrating live code.
 
-To compare all WSIDH variants side-by-side (and keep Kyber’s published numbers in view), use the helper script:
+To compare all WSIDH variants side-by-side (and keep Kyber’s published numbers in view), either pass `--variants` or call the helper script directly:
 
 ```
-./scripts/bench_wsidh_variants.sh 200   # trial count optional (defaults to 1000)
-./wsidh_bench --variants 200            # same sweep via the new built-in driver
+./wsidh_bench --variants 200
+./scripts/bench_wsidh_variants.sh 200
 ```
 
-The script rebuilds each preset (`wsidh512`, `wsidh768`, `wsidh1024`) with the correct `WSIDH_VARIANT`, runs `./wsidh_bench --summary`, and prints a single table juxtaposed with Kyber’s cycle counts. Use this whenever you retune noise bounds or swap in a new low-level optimization so the entire family stays in sync.
+The script rebuilds each preset (`wsidh512`, `wsidh768`, `wsidh1024`) with the active `WITH_AVX2`/`WITH_KYBER` settings, runs `./wsidh_bench --summary`, prints a consolidated table, and finally restores the original variant so your working tree stays consistent. Use this whenever you retune noise bounds or land a new optimization so the entire family stays in sync.
 
-## Kyber Comparison (optional)
+## Kyber Comparison
 
-Drop a Kyber implementation under `third_party/kyber/` (PQClean layouts work well), export symbols such as `kyber512_crypto_kem_keypair`, and run:
-
-```
-# WSIDH-only build (no Kyber linked yet)
-make wsidh_vs_kyber
-./wsidh_vs_kyber
-
-# Once you've dropped a Kyber library somewhere (e.g. third_party/kyber/libkyber_ref.a)
-make wsidh_vs_kyber WITH_KYBER=1 KYBER_LIBS="third_party/kyber/libkyber_ref.a"
-./wsidh_vs_kyber
-```
-
-When `WITH_KYBER=1` and `KYBER_LIBS` points to the appropriate static library (or list of objects), the build defines `WSIDH_ENABLE_KYBER` so Kyber512/768/1024 share the identical timing harness. Otherwise the binary still builds but prints a reminder that Kyber comparison is disabled.
-
+Set `WITH_KYBER=1` (and optionally `WITH_AVX2=1`) when building `wsidh_bench` to pull PQClean’s Kyber implementations into the binary. The benchmark then times Kyber512/768/1024 in the same harness and prints their sizes and cycle counts next to WSIDH. When Kyber isn’t linked, the harness prints the official submitter numbers instead so you can still see the targets.
 ## Notes & TODOs
 
 - `poly.c` retains straightforward arithmetic; once functionality stabilizes we can swap in Montgomery reductions or precomputed tables.

@@ -1,21 +1,29 @@
 #!/bin/sh
-set -e
+set -eu
 
 VARIANTS="wsidh512 wsidh768 wsidh1024"
 TRIALS="${1:-1000}"
 RESULTS=""
+ORIG_VARIANT="${WSIDH_VARIANT:-wsidh512}"
+WITH_AVX2_FLAG="${WSIDH_BENCH_WITH_AVX2:-${WITH_AVX2:-0}}"
+WITH_KYBER_FLAG="${WSIDH_BENCH_WITH_KYBER:-${WITH_KYBER:-0}}"
 
 field_value() {
     echo "$1" | tr ' ' '\n' | awk -F= -v key="$2" '$1==key {print $2}'
 }
 
-printf "Building and benchmarking WSIDH variants (trials=%s)\n" "$TRIALS" >&2
+build_variant() {
+    make -s WSIDH_VARIANT="$1" WITH_AVX2="$WITH_AVX2_FLAG" WITH_KYBER="$WITH_KYBER_FLAG" wsidh_bench
+}
+
+printf "Building and benchmarking WSIDH variants (trials=%s, WITH_AVX2=%s, WITH_KYBER=%s)\n" \
+       "$TRIALS" "$WITH_AVX2_FLAG" "$WITH_KYBER_FLAG" >&2
 
 for variant in $VARIANTS; do
     printf "→ %s\n" "$variant" >&2
     make -s clean
-    make -s WSIDH_VARIANT="$variant" wsidh_bench
-    summary=$(./wsidh_bench "$TRIALS" --summary)
+    build_variant "$variant"
+    summary=$(WSIDH_VARIANT_CHILD=1 ./wsidh_bench "$TRIALS" --summary)
     scheme=$(echo "$summary" | awk '{print $2}')
     pk=$(field_value "$summary" pk)
     sk=$(field_value "$summary" sk)
@@ -49,3 +57,8 @@ printf "%-10s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
        "Kyber768" 1184 2400 1088 32 30000 40000 55000
 printf "%-10s %8d %8d %8d %8d %14.0f %14.0f %14.0f\n" \
        "Kyber1024" 1568 3168 1568 32 40000 55000 70000
+
+printf "\nRestoring WSIDH variant %s (WITH_AVX2=%s, WITH_KYBER=%s)\n" \
+       "$ORIG_VARIANT" "$WITH_AVX2_FLAG" "$WITH_KYBER_FLAG" >&2
+make -s clean
+build_variant "$ORIG_VARIANT"

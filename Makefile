@@ -1,10 +1,14 @@
 CC = gcc
-CFLAGS = -O2 -Wall -Wextra -std=c11 -Iinclude -IPQClean-master/common -DWSIDH_ENABLE_PROFILE
+CFLAGS = -O2 -Wall -Wextra -std=c11 -Iinclude -IPQClean-master/common
 LDFLAGS =
 
 WITH_KYBER ?= 0
 WITH_AVX2 ?= 0
+WSIDH_PROFILE ?= 0
 WSIDH_VARIANT ?= wsidh512
+
+KYBER_IMPL_DIR := clean
+KYBER_API_SUFFIX := CLEAN
 
 ifeq ($(WSIDH_VARIANT),wsidh512)
   WSIDH_PARAM_DEFINE = -DWSIDH_PARAM_SET=WSIDH_PARAM_WS512
@@ -18,14 +22,24 @@ endif
 
 CFLAGS += $(WSIDH_PARAM_DEFINE)
 
+ifeq ($(WSIDH_PROFILE),1)
+  CFLAGS += -DWSIDH_ENABLE_PROFILE
+endif
+
 KYBER_LIBS ?=
 KYBER_CPPFLAGS :=
-KYBER512_DIR ?= third_party/PQClean/crypto_kem/kyber512/clean
-KYBER768_DIR ?= third_party/PQClean/crypto_kem/kyber768/clean
-KYBER1024_DIR ?= third_party/PQClean/crypto_kem/kyber1024/clean
+ifeq ($(WITH_AVX2),1)
+  KYBER_IMPL_DIR := avx2
+  KYBER_API_SUFFIX := AVX2
+endif
+
+KYBER512_DIR ?= third_party/PQClean/crypto_kem/kyber512/$(KYBER_IMPL_DIR)
+KYBER768_DIR ?= third_party/PQClean/crypto_kem/kyber768/$(KYBER_IMPL_DIR)
+KYBER1024_DIR ?= third_party/PQClean/crypto_kem/kyber1024/$(KYBER_IMPL_DIR)
 
 KYBER_DIRS :=
-KYBER_SRCS :=
+KYBER_C_SRCS :=
+KYBER_S_SRCS :=
 
 ifeq ($(WITH_KYBER),1)
   ifneq ($(wildcard $(KYBER512_DIR)),)
@@ -46,8 +60,8 @@ ifeq ($(WITH_KYBER),1)
   ifneq ($(KYBER_DIRS),)
     KYBER_CPPFLAGS += -DWSIDH_ENABLE_KYBER
     CFLAGS += $(addprefix -I,$(KYBER_DIRS)) -IPQClean-master/common
-    KYBER_SRCS := $(foreach dir,$(KYBER_DIRS),$(wildcard $(dir)/*.c))
-    KYBER_SRCS += $(wildcard PQClean-master/common/*.c)
+    KYBER_C_SRCS := $(foreach dir,$(KYBER_DIRS),$(wildcard $(dir)/*.c))
+    KYBER_S_SRCS := $(foreach dir,$(KYBER_DIRS),$(wildcard $(dir)/*.S))
   else
     $(warning WITH_KYBER=1 but no Kyber sources detected; using WSIDH-only path.)
   endif
@@ -58,20 +72,33 @@ CFLAGS += $(KYBER_CPPFLAGS)
 AVX2_DIR :=
 AVX2_SRCS :=
 AVX2_OBJS :=
+KECCAK4X_OBJ :=
+WSIDH_AVX2_INCLUDE_DIR := PQClean-master/crypto_kem/ml-kem-512/avx2
+WSIDH_AVX2_BASE_REL := ../PQClean-master/crypto_kem/ml-kem-512/avx2
 
 ifeq ($(WITH_AVX2),1)
-  AVX2_DIR := PQClean-master/crypto_kem/ml-kem-512/avx2
-  CFLAGS += -DWSIDH_USE_AVX2 -I$(AVX2_DIR) -mavx2 -mbmi2 -mpopcnt
-  AVX2_SRCS := $(AVX2_DIR)/consts.c \
-               $(AVX2_DIR)/basemul.S $(AVX2_DIR)/fq.S \
-               $(AVX2_DIR)/invntt.S $(AVX2_DIR)/ntt.S \
-               $(AVX2_DIR)/shuffle.S
+  ifeq ($(WITH_KYBER),1)
+    WSIDH_AVX2_INCLUDE_DIR := third_party/PQClean/crypto_kem/kyber512/avx2
+    WSIDH_AVX2_BASE_REL := ../third_party/PQClean/crypto_kem/kyber512/avx2
+    AVX2_SRCS :=
+  else
+    AVX2_SRCS := $(WSIDH_AVX2_INCLUDE_DIR)/consts.c \
+                 $(WSIDH_AVX2_INCLUDE_DIR)/basemul.S $(WSIDH_AVX2_INCLUDE_DIR)/fq.S \
+                 $(WSIDH_AVX2_INCLUDE_DIR)/invntt.S $(WSIDH_AVX2_INCLUDE_DIR)/ntt.S \
+                 $(WSIDH_AVX2_INCLUDE_DIR)/shuffle.S $(WSIDH_AVX2_INCLUDE_DIR)/fips202x4.c
+  endif
+  AVX2_DIR := $(WSIDH_AVX2_INCLUDE_DIR)
+  CFLAGS += -DWSIDH_USE_AVX2 -I$(WSIDH_AVX2_INCLUDE_DIR) -IPQClean-master/common/keccak4x -DWSIDH_AVX2_BASE=$(WSIDH_AVX2_BASE_REL) -mavx2 -mbmi2 -mpopcnt
   AVX2_OBJS := $(patsubst %.c,%.o,$(patsubst %.S,%.o,$(AVX2_SRCS))) src/wsidh_avx2.o
+  KECCAK4X_OBJ := PQClean-master/common/keccak4x/KeccakP-1600-times4-SIMD256.o
 endif
 
-KYBER_PQC_OBJS := $(patsubst %.c,%.o,$(KYBER_SRCS))
+KYBER_C_OBJS := $(patsubst %.c,%.o,$(KYBER_C_SRCS))
+KYBER_S_OBJS := $(patsubst %.S,%.o,$(KYBER_S_SRCS))
+KYBER_PQC_OBJS := $(KYBER_C_OBJS) $(KYBER_S_OBJS)
 
-COMMON_OBJS = src/poly.o src/ntt.o src/sha3.o src/wsidh_kem.o src/wsidh_params.o src/wsidh_profiler.o PQClean-master/common/fips202.o $(KYBER_PQC_OBJS) $(AVX2_OBJS)
+COMMON_OBJS = src/poly.o src/ntt.o src/sha3.o src/wsidh_kem.o src/wsidh_params.o src/wsidh_profiler.o PQClean-master/common/fips202.o PQClean-master/common/randombytes.o $(KYBER_PQC_OBJS) $(AVX2_OBJS)
+COMMON_OBJS += $(KECCAK4X_OBJ)
 TEST_OBJS   = test/test_wsidh.o
 BENCH_OBJS  = test/bench_wsidh.o
 KYBER_OBJS  = test/bench_wsidh_kyber.o
@@ -91,13 +118,22 @@ wsidh_bench: $(COMMON_OBJS) $(BENCH_OBJS)
 test/bench_wsidh.o: test/bench_wsidh.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
-$(KYBER_PQC_OBJS): %.o: %.c
+$(KYBER_C_OBJS): %.o: %.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
+$(KYBER_S_OBJS): %.o: %.S
 	$(CC) $(CFLAGS) -c $< -o $@
 
 PQClean-master/common/fips202.o: PQClean-master/common/fips202.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
+PQClean-master/common/randombytes.o: PQClean-master/common/randombytes.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 ifeq ($(WITH_AVX2),1)
+PQClean-master/common/keccak4x/KeccakP-1600-times4-SIMD256.o: PQClean-master/common/keccak4x/KeccakP-1600-times4-SIMD256.c
+	$(CC) $(CFLAGS) -c $< -o $@
+
 $(AVX2_DIR)/%.o: $(AVX2_DIR)/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 

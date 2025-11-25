@@ -6,6 +6,7 @@
 #include <immintrin.h>
 
 #include "wsidh_avx2.h"
+#include "wsidh_avx2_paths.h"
 
 #define KYBER_N 256
 
@@ -14,9 +15,9 @@ typedef union {
     __m256i vec[KYBER_N / 16];
 } wsidh_avx2_poly;
 
-#include "../PQClean-master/crypto_kem/ml-kem-512/avx2/consts.h"
-#include "../PQClean-master/crypto_kem/ml-kem-512/avx2/ntt.h"
-#include "../PQClean-master/crypto_kem/ml-kem-512/avx2/reduce.h"
+#include WSIDH_AVX2_HEADER(consts.h)
+#include WSIDH_AVX2_HEADER(ntt.h)
+#include WSIDH_AVX2_HEADER(reduce.h)
 
 static void wsidh_avx2_load(wsidh_avx2_poly *dst, const int16_t *src) {
     memcpy(dst->coeffs, src, KYBER_N * sizeof(int16_t));

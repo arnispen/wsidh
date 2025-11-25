@@ -14,3 +14,10 @@ void wsidh_shake128(uint8_t *out, size_t outlen,
     shake128(out, outlen, in, inlen);
     WSIDH_PROFILE_END(shake_scope);
 }
+
+void wsidh_shake256(uint8_t *out, size_t outlen,
+                    const uint8_t *in, size_t inlen) {
+    WSIDH_PROFILE_BEGIN(shake256_scope, WSIDH_PROFILE_EVENT_SHA3);
+    shake256(out, outlen, in, inlen);
+    WSIDH_PROFILE_END(shake256_scope);
+}
