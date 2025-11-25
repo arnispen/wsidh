@@ -21,11 +21,16 @@
 #define WSIDH_PK_BYTES     (2 * WSIDH_POLY_COMPRESSED_BYTES)   // b || b_ntt
 #define WSIDH_CT_BYTES     (2 * WSIDH_POLY_COMPRESSED_BYTES)   // compressed u || v
 #define WSIDH_SS_BYTES     32
-#define WSIDH_SK_POLY_BYTES WSIDH_POLY_BYTES        // secret s
-#define WSIDH_SK_SNTT_BYTES WSIDH_POLY_BYTES        // NTT(s)
+
+#if (2 * WSIDH_BOUND_S + 1) > 16
+#error "Secret sampler bound exceeds 4-bit packing capacity"
+#endif
+#define WSIDH_SK_S_BITS   4
+#define WSIDH_SK_S_BYTES  ((WSIDH_N * WSIDH_SK_S_BITS + 7) / 8)
+#define WSIDH_SK_SNTT_BYTES WSIDH_POLY_COMPRESSED_BYTES        // compressed NTT(s)
 #define WSIDH_SK_Z_BYTES   32
 #define WSIDH_PK_HASH_BYTES 32
-#define WSIDH_SK_BYTES (WSIDH_SK_POLY_BYTES + WSIDH_SK_SNTT_BYTES + \
+#define WSIDH_SK_BYTES (WSIDH_SK_S_BYTES + WSIDH_SK_SNTT_BYTES + \
                         WSIDH_PK_BYTES + WSIDH_PK_HASH_BYTES + WSIDH_SK_Z_BYTES)
 
 int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk);

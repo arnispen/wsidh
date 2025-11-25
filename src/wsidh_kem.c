@@ -34,8 +34,8 @@ static int cached_wave_ready = 0;
 /*
  * Secret-key layout (see include/wsidh_kem.h for the exported byte lengths):
  *   sk = s_bytes || s_ntt || pk_bytes || H(pk_bytes) || z
- *   s_bytes      : WSIDH_POLY_BYTES      serialized secret polynomial
- *   s_ntt        : WSIDH_POLY_BYTES      serialized NTT(s)
+ *   s_bytes      : packed 4-bit coefficients of secret s (two coeffs per byte)
+ *   s_ntt        : WSIDH_POLY_COMPRESSED_BYTES    12-bit packed NTT(s)
  *   pk_bytes     : WSIDH_PK_BYTES        compressed public key b(x)
  *   H(pk_bytes)  : WSIDH_PK_HASH_BYTES   convenience hash for documentation/tests
  *   z            : WSIDH_SK_Z_BYTES      random fallback used on FO rejection
@@ -49,12 +49,12 @@ static int cached_wave_ready = 0;
  */
 
 #define SK_S_OFFSET          0
-#define SK_SNTT_OFFSET       (SK_S_OFFSET + WSIDH_SK_POLY_BYTES)
+#define SK_SNTT_OFFSET       (SK_S_OFFSET + WSIDH_SK_S_BYTES)
 #define SK_PK_OFFSET         (SK_SNTT_OFFSET + WSIDH_SK_SNTT_BYTES)
 #define SK_PK_HASH_OFFSET    (SK_PK_OFFSET + WSIDH_PK_BYTES)
 #define SK_Z_OFFSET          (SK_PK_HASH_OFFSET + WSIDH_PK_HASH_BYTES)
 
-#if (WSIDH_SK_BYTES != (WSIDH_SK_POLY_BYTES + WSIDH_SK_SNTT_BYTES + \
+#if (WSIDH_SK_BYTES != (WSIDH_SK_S_BYTES + WSIDH_SK_SNTT_BYTES + \
                         WSIDH_PK_BYTES + WSIDH_PK_HASH_BYTES + WSIDH_SK_Z_BYTES))
 #error "WSIDH_SK_BYTES layout mismatch"
 #endif
@@ -114,6 +114,30 @@ static void poly_decompress12(poly *p, const uint8_t *in) {
         uint16_t t1 = (uint16_t)(in[j + 1] >> 4) | ((uint16_t)in[j + 2] << 4);
         p->coeffs[i] = (int16_t)t0;
         p->coeffs[i + 1] = (int16_t)t1;
+    }
+}
+
+#define WSIDH_SK_SMALL_BIAS (1 << (WSIDH_SK_S_BITS - 1))
+
+static void poly_small_pack(uint8_t *out, const poly *p) {
+    for (int i = 0, j = 0; i < WSIDH_N; i += 2, j++) {
+        int v0 = p->coeffs[i] + WSIDH_SK_SMALL_BIAS;
+        int v1 = p->coeffs[i + 1] + WSIDH_SK_SMALL_BIAS;
+        if (v0 < 0) v0 = 0;
+        if (v0 > 15) v0 = 15;
+        if (v1 < 0) v1 = 0;
+        if (v1 > 15) v1 = 15;
+        out[j] = (uint8_t)((uint8_t)v0 | ((uint8_t)v1 << 4));
+    }
+}
+
+static void poly_small_unpack(poly *p, const uint8_t *in) {
+    for (int i = 0, j = 0; i < WSIDH_N; i += 2, j++) {
+        uint8_t byte = in[j];
+        int c0 = (int)(byte & 0x0F) - WSIDH_SK_SMALL_BIAS;
+        int c1 = (int)(byte >> 4) - WSIDH_SK_SMALL_BIAS;
+        p->coeffs[i] = (int16_t)c0;
+        p->coeffs[i + 1] = (int16_t)c1;
     }
 }
 
@@ -667,8 +691,9 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     poly_canon(&b_ntt_poly);
 
     store_pk(pk, &a, &b, &b_ntt_poly);
-    poly_to_bytes(sk + SK_S_OFFSET, &s);
-    poly_to_bytes(sk + SK_SNTT_OFFSET, &s_ntt_poly);
+    poly_small_pack(sk + SK_S_OFFSET, &s);
+    poly_canon(&s_ntt_poly);
+    poly_compress12(sk + SK_SNTT_OFFSET, &s_ntt_poly);
     memcpy(sk + SK_PK_OFFSET, pk, WSIDH_PK_BYTES);
 
     wsidh_sha3_256(sk + SK_PK_HASH_OFFSET, pk, WSIDH_PK_BYTES);
@@ -717,8 +742,8 @@ int wsidh_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
     uint8_t coins[WSIDH_SEED_BYTES];
 
     load_ct(ct, &u, &v);
-    poly_from_bytes(&s, sk + SK_S_OFFSET);
-    poly_from_bytes(&s_ntt_poly, sk + SK_SNTT_OFFSET);
+    poly_small_unpack(&s, sk + SK_S_OFFSET);
+    poly_decompress12(&s_ntt_poly, sk + SK_SNTT_OFFSET);
     for (int i = 0; i < WSIDH_N; i++) {
         s_ntt_arr[i] = s_ntt_poly.coeffs[i];
     }
