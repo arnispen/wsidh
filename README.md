@@ -6,9 +6,9 @@ WSIDH is a research-grade, RLWE-style key-encapsulation mechanism that mixes a d
 
 | Variant   | Degree `N` | Modulus `q` | `BOUND_S` | `BOUND_E` | pk bytes | sk bytes | ct bytes | ss bytes |
 |-----------|------------|-------------|-----------|-----------|---------:|---------:|---------:|---------:|
-| WSIDH512  | 256        | 3329        | 3         | 2         |      768 |     1856 |      768 |       32 |
-| WSIDH768* | 256        | 3329        | 4         | 3         |      768 |     1856 |      768 |       32 |
-| WSIDH1024*| 256        | 3329        | 5         | 4         |      768 |     1856 |      768 |       32 |
+| WSIDH512  | 256        | 3329        | 3         | 2         |      768 |     1344 |      768 |       32 |
+| WSIDH768* | 256        | 3329        | 4         | 3         |      768 |     1344 |      768 |       32 |
+| WSIDH1024*| 256        | 3329        | 5         | 4         |      768 |     1344 |      768 |       32 |
 
 \*WSIDH768/WSIDH1024 widen the noise bounds while sharing the same `N=256` NTT today; treat them as experimental presets until the dimension is lifted.
 
@@ -30,7 +30,7 @@ Serialization is fixed:
 
 - `pk = compress_12(b) || compress_12(b_ntt)` (768 bytes). The deterministic wave polynomial `a(x)` is regenerated locally, so the public key ships both `b` (time domain) and its NTT so encaps/decap never re-run that NTT.
 - `ct = compress_12(u) || compress_12(v)` (768 bytes). Two 12-bit coefficients are packed into three bytes exactly like Kyber.
-- `sk = s || s_ntt || pk || H(pk) || z` (1472 bytes). Both `s` and its NTT share the raw 16-bit layout to keep FO re-encryption fast. `z` is a 32-byte fallback secret.
+- `sk = s || s_ntt || pk || H(pk) || z` (1344 bytes). The small secret `s` is stored in nibble-packed form (two coefficients per byte) while `NTT(s)` is kept in 12-bit compressed form, so decapsulation can still reuse it without recomputing. `z` is a 32-byte fallback secret.
 - `ss = 32` bytes derived as `SHA3-256(secret || ct)` on either the valid or fallback branch.
 
 All of these helpers live in `wsidh_kem.c` and the byte lengths are exposed via macros in `include/wsidh_kem.h`, so downstream code never guesses the layout.
@@ -91,8 +91,9 @@ Every helper that depends on secrets is constant-time: comparisons use XOR reduc
 `make` variables control the build matrix:
 
 - `WSIDH_VARIANT` — selects WSIDH512/768/1024 at compile time (default `wsidh512`).
-- `WITH_AVX2=1` — enables the AVX2 NTT path (WSIDH uses PQClean’s kernels; Kyber, when linked, does as well).
-- `WITH_KYBER=1` — links PQClean’s Kyber implementations so the benchmark can time them directly.
+- `WITH_AVX2=1` — enables the AVX2 NTT/Keccak path (default is scalar “clean” C).  
+  **Important:** switching this flag requires a rebuild (e.g., `make clean && make WITH_AVX2=1 wsidh_bench`) because the object files differ between scalar and AVX2 builds.
+- Kyber is always linked in (`WITH_KYBER` is forced on) so the benchmark and tests can time/reference it directly; the harness falls back to the official reference numbers only if the PQClean sources are missing.
 
 ```
 make wsidh_test
@@ -123,9 +124,11 @@ To compare all WSIDH variants side-by-side (and keep Kyber’s published numbers
 
 The script rebuilds each preset (`wsidh512`, `wsidh768`, `wsidh1024`) with the active `WITH_AVX2`/`WITH_KYBER` settings, runs `./wsidh_bench --summary`, prints a consolidated table, and finally restores the original variant so your working tree stays consistent. Use this whenever you retune noise bounds or land a new optimization so the entire family stays in sync.
 
+**Tip:** very small trial counts (e.g., 10) have a high variance because a single outlier dominates the average. Use at least a few hundred trials—preferably ≥1000—for stable cycle numbers when gauging progress.
+
 ## Kyber Comparison
 
-Set `WITH_KYBER=1` (and optionally `WITH_AVX2=1`) when building `wsidh_bench` to pull PQClean’s Kyber implementations into the binary. The benchmark then times Kyber512/768/1024 in the same harness and prints their sizes and cycle counts next to WSIDH. When Kyber isn’t linked, the harness prints the official submitter numbers instead so you can still see the targets.
+Kyber is linked by default, so every benchmark run automatically times Kyber512/768/1024 in the same harness and prints their sizes and cycle counts next to WSIDH. If the PQClean sources are missing, the harness falls back to the official reference numbers so you still have a target to compare against. Use the `WITH_AVX2` flag to decide whether both schemes should run in scalar or AVX2 mode, and remember to rebuild after flipping it.
 ## Notes & TODOs
 
 - `poly.c` retains straightforward arithmetic; once functionality stabilizes we can swap in Montgomery reductions or precomputed tables.
