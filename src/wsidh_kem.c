@@ -255,12 +255,6 @@ static void cached_wave_poly(poly *a_out) {
     *a_out = cached_wave_time;
 }
 
-static void poly_mul_with_cached_wave_from_ntt(poly *out,
-                                               const int16_t operand_ntt[WSIDH_N]) {
-    ensure_cached_wave();
-    poly_mul_from_ntt_arrays(out, cached_wave_ntt, operand_ntt);
-}
-
 static int poly_is_cached_wave(const poly *candidate) {
     ensure_cached_wave();
     return memcmp(candidate->coeffs,
@@ -667,10 +661,13 @@ static void wsidh_decrypt(poly *out,
    ============================================================ */
 int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     WSIDH_PROFILE_BEGIN(keygen_scope, WSIDH_PROFILE_EVENT_KEYGEN);
-    poly a, b, s, e, tmp;
+    poly a, b, s, e;
     poly b_ntt_poly;
     poly s_ntt_poly;
     int16_t s_ntt_arr[WSIDH_N];
+    int16_t e_ntt_arr[WSIDH_N];
+    int16_t b_ntt_arr[WSIDH_N];
+    int16_t b_time_arr[WSIDH_N];
     rand_func_t rng = default_rng;
     uint8_t noise_seed[WSIDH_SEED_BYTES];
 
@@ -685,15 +682,28 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
                           noise_seed, 0x50);
 
     poly_ntt_from_poly(s_ntt_arr, &s);
+    poly_ntt_from_poly(e_ntt_arr, &e);
     for (int i = 0; i < WSIDH_N; i++) {
         s_ntt_poly.coeffs[i] = s_ntt_arr[i];
     }
 
-    poly_mul_with_cached_wave_from_ntt(&tmp, s_ntt_arr);
-    poly_add(&b, &tmp, &e);
+    basemul(b_ntt_arr, cached_wave_ntt, s_ntt_arr);
+    for (int i = 0; i < WSIDH_N; i++) {
+        int32_t sum = (int32_t)b_ntt_arr[i] + e_ntt_arr[i];
+        if (sum >= WSIDH_Q) sum -= WSIDH_Q;
+        if (sum < 0) sum += WSIDH_Q;
+        b_ntt_arr[i] = (int16_t)sum;
+    }
+
+    memcpy(b_time_arr, b_ntt_arr, sizeof(b_ntt_arr));
+    inv_ntt(b_time_arr);
+    for (int i = 0; i < WSIDH_N; i++) {
+        b.coeffs[i] = b_time_arr[i];
+    }
     poly_canon(&b);
-    b_ntt_poly = b;
-    ntt(b_ntt_poly.coeffs);
+    for (int i = 0; i < WSIDH_N; i++) {
+        b_ntt_poly.coeffs[i] = b_ntt_arr[i];
+    }
     poly_canon(&b_ntt_poly);
 
     store_pk(pk, &a, &b, &b_ntt_poly);

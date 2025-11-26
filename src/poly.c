@@ -2,6 +2,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#ifdef WSIDH_USE_AVX2
+#include <immintrin.h>
+#endif
 #include "poly.h"
 #include "ntt.h"
 #include "sha3.h"
@@ -54,12 +57,10 @@ void poly_sample_small(poly *a, rand_func_t rng, int bound) {
 
     if (!rng) rng = poly_default_rng;
 
-    uint8_t seed[WSIDH_SEED_BYTES];
     uint8_t buf[2 * WSIDH_N];
     size_t needed = wsidh_sample_bytes_required(bound);
 
-    rng(seed, sizeof(seed));
-    expand_seed_bytes(buf, needed, seed, 0xFF);
+    rng(buf, needed);
     poly_sample_from_stream(a, bound, buf);
 
     WSIDH_PROFILE_END(sample_small);
