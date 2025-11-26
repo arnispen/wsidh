@@ -36,5 +36,6 @@
 int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk);
 int wsidh_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk);
 int wsidh_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk);
+void wsidh_set_random_callback(rand_func_t rng);
 
 #endif // WSIDH_KEM_H

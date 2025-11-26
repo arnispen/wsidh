@@ -2,6 +2,7 @@
 #include <string.h>
 #include "ntt.h"
 #include "params.h"
+#include "wsidh_profiler.h"
 #ifdef WSIDH_USE_AVX2
 #include "wsidh_avx2.h"
 #endif
@@ -85,18 +86,24 @@ static void ntt_apply(int16_t *vecs[], size_t count) {
 
 #ifdef WSIDH_USE_AVX2
 void ntt(int16_t a[WSIDH_N]) {
+    WSIDH_PROFILE_BEGIN(ntt_single_scope, WSIDH_PROFILE_EVENT_NTT_FWD);
     wsidh_avx2_ntt(a);
+    WSIDH_PROFILE_END(ntt_single_scope);
 }
 
 void inv_ntt(int16_t a[WSIDH_N]) {
+    WSIDH_PROFILE_BEGIN(invntt_single_scope, WSIDH_PROFILE_EVENT_NTT_INV);
     wsidh_avx2_invntt(a);
+    WSIDH_PROFILE_END(invntt_single_scope);
 }
 
 void ntt_batch(int16_t *vecs[], size_t count) {
     if (!vecs) return;
     for (size_t i = 0; i < count; i++) {
         if (vecs[i]) {
+            WSIDH_PROFILE_BEGIN(ntt_batch_scope, WSIDH_PROFILE_EVENT_NTT_FWD);
             wsidh_avx2_ntt(vecs[i]);
+            WSIDH_PROFILE_END(ntt_batch_scope);
         }
     }
 }
@@ -105,7 +112,9 @@ void inv_ntt_batch(int16_t *vecs[], size_t count) {
     if (!vecs) return;
     for (size_t i = 0; i < count; i++) {
         if (vecs[i]) {
+            WSIDH_PROFILE_BEGIN(invntt_batch_scope, WSIDH_PROFILE_EVENT_NTT_INV);
             wsidh_avx2_invntt(vecs[i]);
+            WSIDH_PROFILE_END(invntt_batch_scope);
         }
     }
 }
@@ -113,17 +122,23 @@ void inv_ntt_batch(int16_t *vecs[], size_t count) {
 void basemul(int16_t r[WSIDH_N],
              const int16_t a[WSIDH_N],
              const int16_t b[WSIDH_N]) {
+    WSIDH_PROFILE_BEGIN(basemul_scope, WSIDH_PROFILE_EVENT_POINTWISE_MUL);
     wsidh_avx2_basemul(r, a, b);
+    WSIDH_PROFILE_END(basemul_scope);
 }
 #else
 
 void ntt(int16_t a[WSIDH_N]) {
+    WSIDH_PROFILE_BEGIN(ntt_single_scope, WSIDH_PROFILE_EVENT_NTT_FWD);
     int16_t *vecs[1] = {a};
     ntt_apply(vecs, 1);
+    WSIDH_PROFILE_END(ntt_single_scope);
 }
 
 void ntt_batch(int16_t *vecs[], size_t count) {
+    WSIDH_PROFILE_BEGIN(ntt_batch_scope, WSIDH_PROFILE_EVENT_NTT_FWD);
     ntt_apply(vecs, count);
+    WSIDH_PROFILE_END(ntt_batch_scope);
 }
 
 // ---- inverse NTT ----
@@ -170,12 +185,16 @@ static void inv_ntt_apply(int16_t *vecs[], size_t count) {
 }
 
 void inv_ntt(int16_t a[WSIDH_N]) {
+    WSIDH_PROFILE_BEGIN(invntt_single_scope, WSIDH_PROFILE_EVENT_NTT_INV);
     int16_t *vecs[1] = {a};
     inv_ntt_apply(vecs, 1);
+    WSIDH_PROFILE_END(invntt_single_scope);
 }
 
 void inv_ntt_batch(int16_t *vecs[], size_t count) {
+    WSIDH_PROFILE_BEGIN(invntt_batch_scope, WSIDH_PROFILE_EVENT_NTT_INV);
     inv_ntt_apply(vecs, count);
+    WSIDH_PROFILE_END(invntt_batch_scope);
 }
 
 // ---- pointwise multiplication in NTT domain ----
@@ -185,8 +204,10 @@ void basemul(int16_t r[WSIDH_N],
              const int16_t b[WSIDH_N]) {
     const wsidh_params_t *params = wsidh_params_active();
     if (!params) return;
+    WSIDH_PROFILE_BEGIN(basemul_scope, WSIDH_PROFILE_EVENT_POINTWISE_MUL);
     for (int i = 0; i < WSIDH_N; i++) {
         r[i] = barrett_reduce(params, (int32_t)a[i] * b[i]);
     }
+    WSIDH_PROFILE_END(basemul_scope);
 }
 #endif

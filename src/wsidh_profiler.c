@@ -19,7 +19,22 @@ static const char *event_names[WSIDH_PROFILE_EVENT_COUNT] = {
     [WSIDH_PROFILE_EVENT_POLY_MUL_NTT] = "poly_mul_ntt",
     [WSIDH_PROFILE_EVENT_SAMPLE_SMALL] = "poly_sample_small",
     [WSIDH_PROFILE_EVENT_SAMPLE_DET] = "poly_sample_deterministic",
-    [WSIDH_PROFILE_EVENT_SHA3] = "sha3_256",
+    [WSIDH_PROFILE_EVENT_SHA3_256] = "sha3_256",
+    [WSIDH_PROFILE_EVENT_SHAKE128] = "shake128",
+    [WSIDH_PROFILE_EVENT_SHAKE256] = "shake256",
+    [WSIDH_PROFILE_EVENT_SHAKE128X4] = "shake128x4",
+    [WSIDH_PROFILE_EVENT_SHAKE256X4] = "shake256x4",
+    [WSIDH_PROFILE_EVENT_NTT_FWD] = "ntt_forward",
+    [WSIDH_PROFILE_EVENT_NTT_INV] = "ntt_inverse",
+    [WSIDH_PROFILE_EVENT_POINTWISE_MUL] = "pointwise_mul",
+    [WSIDH_PROFILE_EVENT_COMPRESS] = "compress",
+    [WSIDH_PROFILE_EVENT_DECOMPRESS] = "decompress",
+    [WSIDH_PROFILE_EVENT_PACK] = "pack",
+    [WSIDH_PROFILE_EVENT_UNPACK] = "unpack",
+    [WSIDH_PROFILE_EVENT_SERIALIZE] = "serialize",
+    [WSIDH_PROFILE_EVENT_DESERIALIZE] = "deserialize",
+    [WSIDH_PROFILE_EVENT_FO_REENC] = "fo_reencrypt",
+    [WSIDH_PROFILE_EVENT_CT_COMPARE] = "ct_compare",
 };
 
 uint64_t wsidh_profile_rdtsc(void) {

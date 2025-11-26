@@ -3,13 +3,14 @@
 
 #include <stdint.h>
 #include <string.h>
+#include <stdalign.h>
 #include "params.h"
 #ifdef WSIDH_USE_AVX2
 #include <immintrin.h>
 #endif
 
 typedef struct {
-    int16_t coeffs[WSIDH_N];
+    alignas(32) int16_t coeffs[WSIDH_N];
 } poly;
 
 static inline int16_t wsidh_mod_q(int32_t x) {
@@ -33,15 +34,41 @@ static inline void poly_copy(poly *dest, const poly *src) {
 }
 
 static inline void poly_add(poly *c, const poly *a, const poly *b) {
+#ifdef WSIDH_USE_AVX2
+    const __m256i qvec = _mm256_set1_epi16(WSIDH_Q);
+    const __m256i qminus1 = _mm256_set1_epi16(WSIDH_Q - 1);
+    for (int i = 0; i < WSIDH_N; i += 16) {
+        __m256i va = _mm256_load_si256((const __m256i *)&a->coeffs[i]);
+        __m256i vb = _mm256_load_si256((const __m256i *)&b->coeffs[i]);
+        __m256i sum = _mm256_add_epi16(va, vb);
+        __m256i mask = _mm256_cmpgt_epi16(sum, qminus1);
+        sum = _mm256_sub_epi16(sum, _mm256_and_si256(mask, qvec));
+        _mm256_store_si256((__m256i *)&c->coeffs[i], sum);
+    }
+#else
     for (int i = 0; i < WSIDH_N; i++) {
         c->coeffs[i] = wsidh_mod_q((int32_t)a->coeffs[i] + b->coeffs[i]);
     }
+#endif
 }
 
 static inline void poly_sub(poly *c, const poly *a, const poly *b) {
+#ifdef WSIDH_USE_AVX2
+    const __m256i qvec = _mm256_set1_epi16(WSIDH_Q);
+    const __m256i zero = _mm256_setzero_si256();
+    for (int i = 0; i < WSIDH_N; i += 16) {
+        __m256i va = _mm256_load_si256((const __m256i *)&a->coeffs[i]);
+        __m256i vb = _mm256_load_si256((const __m256i *)&b->coeffs[i]);
+        __m256i diff = _mm256_sub_epi16(va, vb);
+        __m256i mask = _mm256_cmpgt_epi16(zero, diff);
+        diff = _mm256_add_epi16(diff, _mm256_and_si256(mask, qvec));
+        _mm256_store_si256((__m256i *)&c->coeffs[i], diff);
+    }
+#else
     for (int i = 0; i < WSIDH_N; i++) {
         c->coeffs[i] = wsidh_mod_q((int32_t)a->coeffs[i] - b->coeffs[i]);
     }
+#endif
 }
 
 static inline uint32_t wsidh_load24_little(const uint8_t *x) {

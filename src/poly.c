@@ -57,10 +57,12 @@ void poly_sample_small(poly *a, rand_func_t rng, int bound) {
 
     if (!rng) rng = poly_default_rng;
 
+    uint8_t seed[WSIDH_SEED_BYTES];
     uint8_t buf[2 * WSIDH_N];
     size_t needed = wsidh_sample_bytes_required(bound);
 
-    rng(buf, needed);
+    rng(seed, sizeof(seed));
+    expand_seed_bytes(buf, needed, seed, 0xFF);
     poly_sample_from_stream(a, bound, buf);
 
     WSIDH_PROFILE_END(sample_small);
@@ -116,8 +118,8 @@ void poly_canon(poly *p) {
 // Fast NTT-based multiplication
 void poly_mul_ntt(poly *c, const poly *a, const poly *b) {
     WSIDH_PROFILE_BEGIN(poly_mul, WSIDH_PROFILE_EVENT_POLY_MUL_NTT);
-    int16_t A[WSIDH_N];
-    int16_t B[WSIDH_N];
+    alignas(32) int16_t A[WSIDH_N];
+    alignas(32) int16_t B[WSIDH_N];
 
     for (int i = 0; i < WSIDH_N; i++) {
         A[i] = a->coeffs[i];
@@ -127,7 +129,7 @@ void poly_mul_ntt(poly *c, const poly *a, const poly *b) {
     int16_t *vecs[2] = {A, B};
     ntt_batch(vecs, 2);
 
-    int16_t R[WSIDH_N];
+    alignas(32) int16_t R[WSIDH_N];
     basemul(R, A, B);
     inv_ntt(R);
 

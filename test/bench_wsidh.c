@@ -518,6 +518,8 @@ int main(int argc, char **argv) {
         }
     }
 
+    wsidh_set_random_callback(random_bytes);
+
     variant_child_mode = getenv("WSIDH_VARIANT_CHILD") != NULL;
 
     const wsidh_params_t *params = wsidh_params_active();
