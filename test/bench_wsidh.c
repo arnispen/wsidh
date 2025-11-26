@@ -379,15 +379,17 @@ static void bench_kyber_target(const kyber_target_t *target,
     dec.avg_cycles = (double)cyc_acc / (double)trials;
     dec.avg_ns = (double)ns_acc / (double)trials;
 
-    printf("--- %s ---\n", target->name);
-    printf("pk=%zu sk=%zu ct=%zu ss=%zu\n",
-           target->pk_len, target->sk_len, target->ct_len, target->ss_len);
-    printf("keypair: cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
-           keygen.avg_cycles, keygen.avg_ns, 1e9 / keygen.avg_ns);
-    printf("encaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
-           enc.avg_cycles, enc.avg_ns, 1e9 / enc.avg_ns);
-    printf("decaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
-           dec.avg_cycles, dec.avg_ns, 1e9 / dec.avg_ns);
+    if (!summary_mode) {
+        printf("--- %s ---\n", target->name);
+        printf("pk=%zu sk=%zu ct=%zu ss=%zu\n",
+               target->pk_len, target->sk_len, target->ct_len, target->ss_len);
+        printf("keypair: cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
+               keygen.avg_cycles, keygen.avg_ns, 1e9 / keygen.avg_ns);
+        printf("encaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
+               enc.avg_cycles, enc.avg_ns, 1e9 / enc.avg_ns);
+        printf("decaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
+               dec.avg_cycles, dec.avg_ns, 1e9 / dec.avg_ns);
+    }
 
     if (out_stats) {
         out_stats->name = target->name;
@@ -420,24 +422,57 @@ static int run_variant_script(size_t trials) {
     printf("Launching WSIDH variant sweep via scripts/bench_wsidh_variants.sh (trials=%zu)\n",
            trials);
     const char *child_env = getenv("WSIDH_VARIANT_CHILD");
+    const char *saved_kyber_flag = getenv("WSIDH_BENCH_WITH_KYBER");
+    const char *saved_avx2_flag = getenv("WSIDH_BENCH_WITH_AVX2");
     setenv("WSIDH_VARIANT_CHILD", "1", 1);
-    setenv("WSIDH_BENCH_WITH_KYBER",
-           wsidh_builds_with_kyber ? "1" : "0", 1);
-    setenv("WSIDH_BENCH_WITH_AVX2",
-           wsidh_builds_with_avx2 ? "1" : "0", 1);
+    if (!saved_kyber_flag) {
+        setenv("WSIDH_BENCH_WITH_KYBER",
+               wsidh_builds_with_kyber ? "1" : "0", 1);
+    }
+    if (!saved_avx2_flag) {
+        setenv("WSIDH_BENCH_WITH_AVX2",
+               wsidh_builds_with_avx2 ? "1" : "0", 1);
+    }
     int rc = system(cmd);
     if (child_env) {
         setenv("WSIDH_VARIANT_CHILD", child_env, 1);
     } else {
         unsetenv("WSIDH_VARIANT_CHILD");
     }
-    unsetenv("WSIDH_BENCH_WITH_KYBER");
-    unsetenv("WSIDH_BENCH_WITH_AVX2");
+    if (saved_kyber_flag) {
+        setenv("WSIDH_BENCH_WITH_KYBER", saved_kyber_flag, 1);
+    } else {
+        unsetenv("WSIDH_BENCH_WITH_KYBER");
+    }
+    if (saved_avx2_flag) {
+        setenv("WSIDH_BENCH_WITH_AVX2", saved_avx2_flag, 1);
+    } else {
+        unsetenv("WSIDH_BENCH_WITH_AVX2");
+    }
     if (rc != 0) {
         fprintf(stderr, "Variant sweep failed (exit=%d)\n", rc);
         return rc;
     }
     return 0;
+}
+
+static void print_summary_record(const char *name,
+                                 size_t pk,
+                                 size_t sk,
+                                 size_t ct,
+                                 size_t ss,
+                                 const bench_result_t *keygen,
+                                 const bench_result_t *enc,
+                                 const bench_result_t *dec) {
+    printf("SUMMARY %s pk=%zu sk=%zu ct=%zu ss=%zu keygen=%.2f encaps=%.2f decaps=%.2f\n",
+           name,
+           pk,
+           sk,
+           ct,
+           ss,
+           keygen ? keygen->avg_cycles : 0.0,
+           enc ? enc->avg_cycles : 0.0,
+           dec ? dec->avg_cycles : 0.0);
 }
 
 int main(int argc, char **argv) {
@@ -456,6 +491,27 @@ int main(int argc, char **argv) {
             variants_only_mode = 1;
             continue;
         }
+        if (strcmp(argv[i], "AVX2=1") == 0 ||
+            strcmp(argv[i], "WITH_AVX2=1") == 0) {
+            setenv("WSIDH_BENCH_WITH_AVX2", "1", 1);
+            continue;
+        }
+        if (strcmp(argv[i], "AVX2=0") == 0 ||
+            strcmp(argv[i], "WITH_AVX2=0") == 0 ||
+            strcmp(argv[i], "scalar") == 0) {
+            setenv("WSIDH_BENCH_WITH_AVX2", "0", 1);
+            continue;
+        }
+        if (strcmp(argv[i], "KYBER=1") == 0 ||
+            strcmp(argv[i], "WITH_KYBER=1") == 0) {
+            setenv("WSIDH_BENCH_WITH_KYBER", "1", 1);
+            continue;
+        }
+        if (strcmp(argv[i], "KYBER=0") == 0 ||
+            strcmp(argv[i], "WITH_KYBER=0") == 0) {
+            setenv("WSIDH_BENCH_WITH_KYBER", "0", 1);
+            continue;
+        }
         long custom = strtol(argv[i], NULL, 10);
         if (custom > 0) {
             trials = (size_t)custom;
@@ -464,6 +520,12 @@ int main(int argc, char **argv) {
 
     variant_child_mode = getenv("WSIDH_VARIANT_CHILD") != NULL;
 
+    const wsidh_params_t *params = wsidh_params_active();
+    if (!params) {
+        fprintf(stderr, "No active WSIDH parameter struct available\n");
+        return 1;
+    }
+
     if (variants_only_mode) {
         return run_variant_script(trials);
     }
@@ -471,37 +533,6 @@ int main(int argc, char **argv) {
     bench_result_t keygen = {0}, enc = {0}, dec = {0};
 
     bench_wsidh(trials, &keygen, &enc, &dec, summary_mode);
-
-    if (summary_mode) {
-        printf("SUMMARY %s trials=%zu pk=%zu sk=%zu ct=%zu ss=%zu keygen=%.2f encaps=%.2f decaps=%.2f\n",
-               wsidh_active_params.name,
-               trials,
-               (size_t)WSIDH_PK_BYTES,
-               (size_t)WSIDH_SK_BYTES,
-               (size_t)WSIDH_CT_BYTES,
-               (size_t)WSIDH_SS_BYTES,
-               keygen.avg_cycles,
-               enc.avg_cycles,
-               dec.avg_cycles);
-        return 0;
-    }
-
-    printf("=== WSIDH Benchmark (N=%d, q=%d, trials=%zu) ===\n",
-           WSIDH_N, WSIDH_Q, trials);
-    printf("pk=%zu sk=%zu ct=%zu ss=%zu\n",
-           (size_t)WSIDH_PK_BYTES, (size_t)WSIDH_SK_BYTES,
-           (size_t)WSIDH_CT_BYTES, (size_t)WSIDH_SS_BYTES);
-    printf("keypair: cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
-           keygen.avg_cycles, keygen.avg_ns, 1e9 / keygen.avg_ns);
-    printf("encaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
-           enc.avg_cycles, enc.avg_ns, 1e9 / enc.avg_ns);
-    printf("decaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
-           dec.avg_cycles, dec.avg_ns, 1e9 / dec.avg_ns);
-
-    size_t micro_trials = trials < 100 ? trials : 100;
-    microbench_poly_mul_ntt(micro_trials);
-    microbench_sampling(micro_trials);
-    microbench_sha3(micro_trials);
 
     kem_stats_t wsidh_rows[1] = {{
         .name = wsidh_active_params.name,
@@ -513,6 +544,8 @@ int main(int argc, char **argv) {
         .enc = enc,
         .dec = dec,
     }};
+    kem_stats_t *kyber_table = NULL;
+    size_t kyber_count = 0;
 #ifdef WSIDH_ENABLE_KYBER
     const kyber_target_t kyber_targets[] = {
         {KYBER512_NAME,
@@ -545,10 +578,8 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < sizeof(kyber_targets) / sizeof(kyber_targets[0]); i++) {
         bench_kyber_target(&kyber_targets[i], trials, &kyber_stats[i]);
     }
-    print_combined_table("KEM Cycle/Size Table",
-                         wsidh_rows, 1,
-                         kyber_stats,
-                         sizeof(kyber_stats) / sizeof(kyber_stats[0]));
+    kyber_table = kyber_stats;
+    kyber_count = sizeof(kyber_stats) / sizeof(kyber_stats[0]);
 #else
     kem_stats_t placeholder_stats[sizeof(kyber_reference_numbers) / sizeof(kyber_reference_numbers[0])];
     for (size_t i = 0; i < sizeof(kyber_reference_numbers) / sizeof(kyber_reference_numbers[0]); i++) {
@@ -564,10 +595,59 @@ int main(int argc, char **argv) {
         placeholder_stats[i].enc.avg_ns = 0.0;
         placeholder_stats[i].dec.avg_ns = 0.0;
     }
+    kyber_table = placeholder_stats;
+    kyber_count = sizeof(placeholder_stats) / sizeof(placeholder_stats[0]);
+#endif
+
+    if (summary_mode) {
+        print_summary_record(wsidh_rows[0].name,
+                             wsidh_rows[0].pk_len,
+                             wsidh_rows[0].sk_len,
+                             wsidh_rows[0].ct_len,
+                             wsidh_rows[0].ss_len,
+                             &wsidh_rows[0].keygen,
+                             &wsidh_rows[0].enc,
+                             &wsidh_rows[0].dec);
+        for (size_t i = 0; i < kyber_count; i++) {
+            print_summary_record(kyber_table[i].name,
+                                 kyber_table[i].pk_len,
+                                 kyber_table[i].sk_len,
+                                 kyber_table[i].ct_len,
+                                 kyber_table[i].ss_len,
+                                 &kyber_table[i].keygen,
+                                 &kyber_table[i].enc,
+                                 &kyber_table[i].dec);
+        }
+        return 0;
+    }
+
+    printf("=== WSIDH Benchmark (N=%d, q=%d, trials=%zu) ===\n",
+           params->N, params->Q, trials);
+    printf("pk=%zu sk=%zu ct=%zu ss=%zu\n",
+           (size_t)WSIDH_PK_BYTES, (size_t)WSIDH_SK_BYTES,
+           (size_t)WSIDH_CT_BYTES, (size_t)WSIDH_SS_BYTES);
+    printf("keypair: cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
+           keygen.avg_cycles, keygen.avg_ns, 1e9 / keygen.avg_ns);
+    printf("encaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
+           enc.avg_cycles, enc.avg_ns, 1e9 / enc.avg_ns);
+    printf("decaps : cycles=%.2f  ns=%.2f  ops/sec=%.2f\n",
+           dec.avg_cycles, dec.avg_ns, 1e9 / dec.avg_ns);
+
+    size_t micro_trials = trials < 100 ? trials : 100;
+    microbench_poly_mul_ntt(micro_trials);
+    microbench_sampling(micro_trials);
+    microbench_sha3(micro_trials);
+
+#ifdef WSIDH_ENABLE_KYBER
+    print_combined_table("KEM Cycle/Size Table",
+                         wsidh_rows, 1,
+                         kyber_table,
+                         kyber_count);
+#else
     print_combined_table("KEM Cycle/Size Table (scalar)",
                          wsidh_rows, 1,
-                         placeholder_stats,
-                         sizeof(placeholder_stats) / sizeof(placeholder_stats[0]));
+                         kyber_table,
+                         kyber_count);
 #endif
 
     if (!summary_mode && variants_mode && !variant_child_mode) {

@@ -97,7 +97,7 @@ KYBER_C_OBJS := $(patsubst %.c,%.o,$(KYBER_C_SRCS))
 KYBER_S_OBJS := $(patsubst %.S,%.o,$(KYBER_S_SRCS))
 KYBER_PQC_OBJS := $(KYBER_C_OBJS) $(KYBER_S_OBJS)
 
-COMMON_OBJS = src/poly.o src/ntt.o src/sha3.o src/wsidh_kem.o src/wsidh_params.o src/wsidh_profiler.o PQClean-master/common/fips202.o PQClean-master/common/randombytes.o $(KYBER_PQC_OBJS) $(AVX2_OBJS)
+COMMON_OBJS = src/params_256.o src/poly.o src/ntt.o src/sha3.o src/wsidh_kem.o src/wsidh_params.o src/wsidh_profiler.o PQClean-master/common/fips202.o PQClean-master/common/randombytes.o $(KYBER_PQC_OBJS) $(AVX2_OBJS)
 COMMON_OBJS += $(KECCAK4X_OBJ)
 TEST_OBJS   = test/test_wsidh.o
 BENCH_OBJS  = test/bench_wsidh.o

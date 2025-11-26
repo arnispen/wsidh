@@ -6,74 +6,32 @@
 #include "wsidh_avx2.h"
 #endif
 
-// We assume:
-//   WSIDH_Q = 12289
-//   WSIDH_N = 256
-//
-// We use a primitive N-th root of unity modulo q:
-//   omega = 8340  (order 256 mod 12289)
-//   omega_inv = 1696  (multiplicative inverse of omega mod q)
-//   n_inv = 12241  (inverse of 256 mod q)
-
-static inline int16_t barrett_reduce(int32_t a) {
-    const int32_t v = ((1u << 26) + (WSIDH_Q / 2)) / WSIDH_Q;
-    int32_t t = ((int64_t)v * a) >> 26;
-    t *= WSIDH_Q;
+static inline int16_t barrett_reduce(const wsidh_params_t *params, int32_t a) {
+    const int32_t q = params->Q;
+    int32_t t = ((int64_t)params->barrett_v * a) >> 26;
+    t *= q;
     a -= t;
-    if (a < 0) a += WSIDH_Q;
-    if (a >= WSIDH_Q) a -= WSIDH_Q;
+    if (a < 0) a += q;
+    if (a >= q) a -= q;
     return (int16_t)a;
 }
 
-static inline int16_t mod_add(int16_t a, int16_t b) {
+static inline int16_t mod_add(const wsidh_params_t *params, int16_t a, int16_t b) {
     int32_t t = (int32_t)a + b;
-    if (t >= WSIDH_Q) t -= WSIDH_Q;
+    if (t >= params->Q) t -= params->Q;
     return (int16_t)t;
 }
 
-static inline int16_t mod_sub(int16_t a, int16_t b) {
+static inline int16_t mod_sub(const wsidh_params_t *params, int16_t a, int16_t b) {
     int32_t t = (int32_t)a - b;
-    if (t < 0) t += WSIDH_Q;
+    if (t < 0) t += params->Q;
     return (int16_t)t;
-}
-
-static int16_t mod_pow(int16_t base, int32_t exp) {
-    int32_t res = 1;
-    int32_t b = base;
-    while (exp > 0) {
-        if (exp & 1) {
-            res = (res * b) % WSIDH_Q;
-        }
-        b = (b * b) % WSIDH_Q;
-        exp >>= 1;
-    }
-    return (int16_t)res;
-}
-
-static int twiddle_initialized = 0;
-static int16_t wlen_fwd[16];
-static int16_t wlen_inv[16];
-static int stage_count = 0;
-
-static void ntt_init(void) {
-    if (twiddle_initialized) return;
-    const int16_t omega = 8340;
-    const int16_t omega_inv = 1696;
-
-    int stage = 0;
-    for (int len = 2; len <= WSIDH_N; len <<= 1) {
-        wlen_fwd[stage] = mod_pow(omega, WSIDH_N / len);
-        wlen_inv[stage] = mod_pow(omega_inv, WSIDH_N / len);
-        stage++;
-    }
-    stage_count = stage;
-    twiddle_initialized = 1;
 }
 
 // ---- bit-reversal permutation ----
 
-static void bitreverse(int16_t a[WSIDH_N]) {
-    int n = WSIDH_N;
+static void bitreverse(const wsidh_params_t *params, int16_t a[WSIDH_N]) {
+    int n = params->N;
     int j = 0;
     for (int i = 1; i < n; i++) {
         int bit = n >> 1;
@@ -93,18 +51,19 @@ static void bitreverse(int16_t a[WSIDH_N]) {
 // ---- forward NTT ----
 
 static void ntt_apply(int16_t *vecs[], size_t count) {
-    if (!vecs || count == 0) {
+    const wsidh_params_t *params = wsidh_params_active();
+    if (!params || !vecs || count == 0) {
         return;
     }
-    ntt_init();
     for (size_t idx = 0; idx < count; idx++) {
-        bitreverse(vecs[idx]);
+        bitreverse(params, vecs[idx]);
     }
 
     int len = 2;
-    for (int stage = 0; stage < stage_count; stage++) {
+    int stages = (int)params->stage_count;
+    for (int stage = 0; stage < stages; stage++) {
         int half = len >> 1;
-        int16_t wlen = wlen_fwd[stage];
+        int16_t wlen = params->zetas[stage];
         for (int i = 0; i < WSIDH_N; i += len) {
             int16_t w = 1;
             for (int j = 0; j < half; j++) {
@@ -113,11 +72,11 @@ static void ntt_apply(int16_t *vecs[], size_t count) {
                 for (size_t vec = 0; vec < count; vec++) {
                     int16_t *a = vecs[vec];
                     int16_t u = a[idx1];
-                    int16_t v = barrett_reduce((int32_t)a[idx2] * w);
-                    a[idx1] = mod_add(u, v);
-                    a[idx2] = mod_sub(u, v);
+                    int16_t v = barrett_reduce(params, (int32_t)a[idx2] * w);
+                    a[idx1] = mod_add(params, u, v);
+                    a[idx2] = mod_sub(params, u, v);
                 }
-                w = barrett_reduce((int32_t)w * wlen);
+                w = barrett_reduce(params, (int32_t)w * wlen);
             }
         }
         len <<= 1;
@@ -170,20 +129,20 @@ void ntt_batch(int16_t *vecs[], size_t count) {
 // ---- inverse NTT ----
 
 static void inv_ntt_apply(int16_t *vecs[], size_t count) {
-    if (!vecs || count == 0) {
+    const wsidh_params_t *params = wsidh_params_active();
+    if (!params || !vecs || count == 0) {
         return;
     }
-    ntt_init();
     for (size_t idx = 0; idx < count; idx++) {
-        bitreverse(vecs[idx]);
+        bitreverse(params, vecs[idx]);
     }
 
-    const int16_t n_inv = 12241;  // inverse of N mod q
     int len = 2;
 
-    for (int stage = 0; stage < stage_count; stage++) {
+    int stages = (int)params->stage_count;
+    for (int stage = 0; stage < stages; stage++) {
         int half = len >> 1;
-        int16_t wlen = wlen_inv[stage];
+        int16_t wlen = params->zetas_inv[stage];
         for (int i = 0; i < WSIDH_N; i += len) {
             int16_t w = 1;
             for (int j = 0; j < half; j++) {
@@ -192,11 +151,11 @@ static void inv_ntt_apply(int16_t *vecs[], size_t count) {
                 for (size_t vec = 0; vec < count; vec++) {
                     int16_t *a = vecs[vec];
                     int16_t u = a[idx1];
-                    int16_t v = barrett_reduce((int32_t)a[idx2] * w);
-                    a[idx1] = mod_add(u, v);
-                    a[idx2] = mod_sub(u, v);
+                    int16_t v = barrett_reduce(params, (int32_t)a[idx2] * w);
+                    a[idx1] = mod_add(params, u, v);
+                    a[idx2] = mod_sub(params, u, v);
                 }
-                w = barrett_reduce((int32_t)w * wlen);
+                w = barrett_reduce(params, (int32_t)w * wlen);
             }
         }
         len <<= 1;
@@ -205,7 +164,7 @@ static void inv_ntt_apply(int16_t *vecs[], size_t count) {
     for (size_t vec = 0; vec < count; vec++) {
         int16_t *a = vecs[vec];
         for (int i = 0; i < WSIDH_N; i++) {
-            a[i] = barrett_reduce((int32_t)a[i] * n_inv);
+            a[i] = barrett_reduce(params, (int32_t)a[i] * params->n_inv);
         }
     }
 }
@@ -224,8 +183,10 @@ void inv_ntt_batch(int16_t *vecs[], size_t count) {
 void basemul(int16_t r[WSIDH_N],
              const int16_t a[WSIDH_N],
              const int16_t b[WSIDH_N]) {
+    const wsidh_params_t *params = wsidh_params_active();
+    if (!params) return;
     for (int i = 0; i < WSIDH_N; i++) {
-        r[i] = barrett_reduce((int32_t)a[i] * b[i]);
+        r[i] = barrett_reduce(params, (int32_t)a[i] * b[i]);
     }
 }
 #endif

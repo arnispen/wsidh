@@ -481,9 +481,12 @@ static void expand_deterministic(poly *r,
                                  poly *e1,
                                  poly *e2,
                                   const uint8_t seed[WSIDH_SEED_BYTES]) {
-    sample_triple_from_seed(r, WSIDH_BOUND_S,
-                            e1, WSIDH_BOUND_E,
-                            e2, WSIDH_BOUND_E,
+    const wsidh_params_t *params = wsidh_params_active();
+    int bound_s = params ? params->bound_s : WSIDH_BOUND_S;
+    int bound_e = params ? params->bound_e : WSIDH_BOUND_E;
+    sample_triple_from_seed(r, bound_s,
+                            e1, bound_e,
+                            e2, bound_e,
                             seed, 0x80);
 }
 
@@ -674,8 +677,11 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     cached_wave_poly(&a);
 
     rng(noise_seed, sizeof(noise_seed));
-    sample_pair_from_seed(&s, WSIDH_BOUND_S,
-                          &e, WSIDH_BOUND_E,
+    const wsidh_params_t *params = wsidh_params_active();
+    int bound_s = params ? params->bound_s : WSIDH_BOUND_S;
+    int bound_e = params ? params->bound_e : WSIDH_BOUND_E;
+    sample_pair_from_seed(&s, bound_s,
+                          &e, bound_e,
                           noise_seed, 0x50);
 
     poly_ntt_from_poly(s_ntt_arr, &s);

@@ -113,9 +113,14 @@ int main(void) {
 
     int ok = (memcmp(ss_enc, ss_dec, WSIDH_SS_BYTES) == 0);
 
+    const wsidh_params_t *params = wsidh_params_active();
+    if (!params) {
+        fprintf(stderr, "Active parameter struct unavailable\n");
+        return 1;
+    }
     printf("%s parameters: N=%d q=%d bound_s=%d bound_e=%d\n",
            wsidh_active_params.name,
-           WSIDH_N, WSIDH_Q, WSIDH_BOUND_S, WSIDH_BOUND_E);
+           params->N, params->Q, params->bound_s, params->bound_e);
     printf("pk=%zu bytes, sk=%zu bytes, ct=%zu bytes, ss=%zu bytes\n",
            (size_t)WSIDH_PK_BYTES, (size_t)WSIDH_SK_BYTES,
            (size_t)WSIDH_CT_BYTES, (size_t)WSIDH_SS_BYTES);
