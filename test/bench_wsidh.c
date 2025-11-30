@@ -27,27 +27,12 @@ typedef struct {
 } kem_stats_t;
 
 static int summary_mode = 0;
-static int variants_mode = 0;
-static int variants_only_mode = 0;
-static int variant_child_mode = 0;
 
 static void print_combined_table(const char *title,
                                  const kem_stats_t *wsidh_rows,
                                  size_t wsidh_count,
                                  const kem_stats_t *other_rows,
                                  size_t other_count);
-
-#ifdef WSIDH_ENABLE_KYBER
-static const int wsidh_builds_with_kyber = 1;
-#else
-static const int wsidh_builds_with_kyber = 0;
-#endif
-
-#ifdef WSIDH_USE_AVX2
-static const int wsidh_builds_with_avx2 = 1;
-#else
-static const int wsidh_builds_with_avx2 = 0;
-#endif
 
 static inline uint64_t rdtsc(void) {
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386)
@@ -245,68 +230,30 @@ typedef struct {
 
 static const kyber_placeholder_t kyber_reference_numbers[] = {
     {"Kyber512 (ref)", 20000.0, 28000.0, 38000.0, 800, 1632, 768, 32},
-    {"Kyber768 (ref)", 30000.0, 40000.0, 55000.0, 1184, 2400, 1088, 32},
-    {"Kyber1024 (ref)", 40000.0, 55000.0, 70000.0, 1568, 3168, 1568, 32},
 };
 #endif
 
 #ifdef WSIDH_ENABLE_KYBER
 #if defined(WSIDH_USE_AVX2)
 #include "../third_party/PQClean/crypto_kem/kyber512/avx2/api.h"
-#include "../third_party/PQClean/crypto_kem/kyber768/avx2/api.h"
-#include "../third_party/PQClean/crypto_kem/kyber1024/avx2/api.h"
 #define KYBER512_NAME "Kyber512-AVX2"
-#define KYBER768_NAME "Kyber768-AVX2"
-#define KYBER1024_NAME "Kyber1024-AVX2"
 #define KYBER512_PUBLICKEYBYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_PUBLICKEYBYTES
 #define KYBER512_SECRETKEYBYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_SECRETKEYBYTES
 #define KYBER512_CIPHERTEXTBYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_CIPHERTEXTBYTES
 #define KYBER512_BYTES PQCLEAN_MLKEM512_AVX2_CRYPTO_BYTES
-#define KYBER768_PUBLICKEYBYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_PUBLICKEYBYTES
-#define KYBER768_SECRETKEYBYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_SECRETKEYBYTES
-#define KYBER768_CIPHERTEXTBYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_CIPHERTEXTBYTES
-#define KYBER768_BYTES PQCLEAN_MLKEM768_AVX2_CRYPTO_BYTES
-#define KYBER1024_PUBLICKEYBYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_PUBLICKEYBYTES
-#define KYBER1024_SECRETKEYBYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_SECRETKEYBYTES
-#define KYBER1024_CIPHERTEXTBYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_CIPHERTEXTBYTES
-#define KYBER1024_BYTES PQCLEAN_MLKEM1024_AVX2_CRYPTO_BYTES
 #define kyber512_crypto_kem_keypair PQCLEAN_MLKEM512_AVX2_crypto_kem_keypair
 #define kyber512_crypto_kem_enc PQCLEAN_MLKEM512_AVX2_crypto_kem_enc
 #define kyber512_crypto_kem_dec PQCLEAN_MLKEM512_AVX2_crypto_kem_dec
-#define kyber768_crypto_kem_keypair PQCLEAN_MLKEM768_AVX2_crypto_kem_keypair
-#define kyber768_crypto_kem_enc PQCLEAN_MLKEM768_AVX2_crypto_kem_enc
-#define kyber768_crypto_kem_dec PQCLEAN_MLKEM768_AVX2_crypto_kem_dec
-#define kyber1024_crypto_kem_keypair PQCLEAN_MLKEM1024_AVX2_crypto_kem_keypair
-#define kyber1024_crypto_kem_enc PQCLEAN_MLKEM1024_AVX2_crypto_kem_enc
-#define kyber1024_crypto_kem_dec PQCLEAN_MLKEM1024_AVX2_crypto_kem_dec
 #else
 #include "../third_party/PQClean/crypto_kem/kyber512/clean/api.h"
-#include "../third_party/PQClean/crypto_kem/kyber768/clean/api.h"
-#include "../third_party/PQClean/crypto_kem/kyber1024/clean/api.h"
 #define KYBER512_NAME "Kyber512"
-#define KYBER768_NAME "Kyber768"
-#define KYBER1024_NAME "Kyber1024"
 #define KYBER512_PUBLICKEYBYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_PUBLICKEYBYTES
 #define KYBER512_SECRETKEYBYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_SECRETKEYBYTES
 #define KYBER512_CIPHERTEXTBYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_CIPHERTEXTBYTES
 #define KYBER512_BYTES PQCLEAN_MLKEM512_CLEAN_CRYPTO_BYTES
-#define KYBER768_PUBLICKEYBYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_PUBLICKEYBYTES
-#define KYBER768_SECRETKEYBYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_SECRETKEYBYTES
-#define KYBER768_CIPHERTEXTBYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_CIPHERTEXTBYTES
-#define KYBER768_BYTES PQCLEAN_MLKEM768_CLEAN_CRYPTO_BYTES
-#define KYBER1024_PUBLICKEYBYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_PUBLICKEYBYTES
-#define KYBER1024_SECRETKEYBYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_SECRETKEYBYTES
-#define KYBER1024_CIPHERTEXTBYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_CIPHERTEXTBYTES
-#define KYBER1024_BYTES PQCLEAN_MLKEM1024_CLEAN_CRYPTO_BYTES
 #define kyber512_crypto_kem_keypair PQCLEAN_MLKEM512_CLEAN_crypto_kem_keypair
 #define kyber512_crypto_kem_enc PQCLEAN_MLKEM512_CLEAN_crypto_kem_enc
 #define kyber512_crypto_kem_dec PQCLEAN_MLKEM512_CLEAN_crypto_kem_dec
-#define kyber768_crypto_kem_keypair PQCLEAN_MLKEM768_CLEAN_crypto_kem_keypair
-#define kyber768_crypto_kem_enc PQCLEAN_MLKEM768_CLEAN_crypto_kem_enc
-#define kyber768_crypto_kem_dec PQCLEAN_MLKEM768_CLEAN_crypto_kem_dec
-#define kyber1024_crypto_kem_keypair PQCLEAN_MLKEM1024_CLEAN_crypto_kem_keypair
-#define kyber1024_crypto_kem_enc PQCLEAN_MLKEM1024_CLEAN_crypto_kem_enc
-#define kyber1024_crypto_kem_dec PQCLEAN_MLKEM1024_CLEAN_crypto_kem_dec
 #endif
 
 typedef struct {
@@ -410,52 +357,6 @@ cleanup:
 }
 #endif
 
-static int run_variant_script(size_t trials) {
-    char cmd[256];
-    int len = snprintf(cmd, sizeof(cmd),
-                       "./scripts/bench_wsidh_variants.sh %zu",
-                       trials);
-    if (len < 0 || (size_t)len >= sizeof(cmd)) {
-        fprintf(stderr, "Error: trials argument too large\n");
-        return 1;
-    }
-    printf("Launching WSIDH variant sweep via scripts/bench_wsidh_variants.sh (trials=%zu)\n",
-           trials);
-    const char *child_env = getenv("WSIDH_VARIANT_CHILD");
-    const char *saved_kyber_flag = getenv("WSIDH_BENCH_WITH_KYBER");
-    const char *saved_avx2_flag = getenv("WSIDH_BENCH_WITH_AVX2");
-    setenv("WSIDH_VARIANT_CHILD", "1", 1);
-    if (!saved_kyber_flag) {
-        setenv("WSIDH_BENCH_WITH_KYBER",
-               wsidh_builds_with_kyber ? "1" : "0", 1);
-    }
-    if (!saved_avx2_flag) {
-        setenv("WSIDH_BENCH_WITH_AVX2",
-               wsidh_builds_with_avx2 ? "1" : "0", 1);
-    }
-    int rc = system(cmd);
-    if (child_env) {
-        setenv("WSIDH_VARIANT_CHILD", child_env, 1);
-    } else {
-        unsetenv("WSIDH_VARIANT_CHILD");
-    }
-    if (saved_kyber_flag) {
-        setenv("WSIDH_BENCH_WITH_KYBER", saved_kyber_flag, 1);
-    } else {
-        unsetenv("WSIDH_BENCH_WITH_KYBER");
-    }
-    if (saved_avx2_flag) {
-        setenv("WSIDH_BENCH_WITH_AVX2", saved_avx2_flag, 1);
-    } else {
-        unsetenv("WSIDH_BENCH_WITH_AVX2");
-    }
-    if (rc != 0) {
-        fprintf(stderr, "Variant sweep failed (exit=%d)\n", rc);
-        return rc;
-    }
-    return 0;
-}
-
 static void print_summary_record(const char *name,
                                  size_t pk,
                                  size_t sk,
@@ -482,54 +383,19 @@ int main(int argc, char **argv) {
             summary_mode = 1;
             continue;
         }
-        if (strcmp(argv[i], "--variants") == 0) {
-            variants_mode = 1;
-            continue;
-        }
-        if (strcmp(argv[i], "--variants-only") == 0) {
-            variants_mode = 1;
-            variants_only_mode = 1;
-            continue;
-        }
-        if (strcmp(argv[i], "AVX2=1") == 0 ||
-            strcmp(argv[i], "WITH_AVX2=1") == 0) {
-            setenv("WSIDH_BENCH_WITH_AVX2", "1", 1);
-            continue;
-        }
-        if (strcmp(argv[i], "AVX2=0") == 0 ||
-            strcmp(argv[i], "WITH_AVX2=0") == 0 ||
-            strcmp(argv[i], "scalar") == 0) {
-            setenv("WSIDH_BENCH_WITH_AVX2", "0", 1);
-            continue;
-        }
-        if (strcmp(argv[i], "KYBER=1") == 0 ||
-            strcmp(argv[i], "WITH_KYBER=1") == 0) {
-            setenv("WSIDH_BENCH_WITH_KYBER", "1", 1);
-            continue;
-        }
-        if (strcmp(argv[i], "KYBER=0") == 0 ||
-            strcmp(argv[i], "WITH_KYBER=0") == 0) {
-            setenv("WSIDH_BENCH_WITH_KYBER", "0", 1);
-            continue;
-        }
-        long custom = strtol(argv[i], NULL, 10);
-        if (custom > 0) {
+        char *end = NULL;
+        long custom = strtol(argv[i], &end, 10);
+        if (end && *end == '\0' && custom > 0) {
             trials = (size_t)custom;
         }
     }
 
     wsidh_set_random_callback(random_bytes);
 
-    variant_child_mode = getenv("WSIDH_VARIANT_CHILD") != NULL;
-
     const wsidh_params_t *params = wsidh_params_active();
     if (!params) {
         fprintf(stderr, "No active WSIDH parameter struct available\n");
         return 1;
-    }
-
-    if (variants_only_mode) {
-        return run_variant_script(trials);
     }
 
     bench_result_t keygen = {0}, enc = {0}, dec = {0};
@@ -558,22 +424,6 @@ int main(int argc, char **argv) {
          kyber512_crypto_kem_keypair,
          kyber512_crypto_kem_enc,
          kyber512_crypto_kem_dec},
-        {KYBER768_NAME,
-         KYBER768_PUBLICKEYBYTES,
-         KYBER768_SECRETKEYBYTES,
-         KYBER768_CIPHERTEXTBYTES,
-         KYBER768_BYTES,
-         kyber768_crypto_kem_keypair,
-         kyber768_crypto_kem_enc,
-         kyber768_crypto_kem_dec},
-        {KYBER1024_NAME,
-         KYBER1024_PUBLICKEYBYTES,
-         KYBER1024_SECRETKEYBYTES,
-         KYBER1024_CIPHERTEXTBYTES,
-         KYBER1024_BYTES,
-         kyber1024_crypto_kem_keypair,
-         kyber1024_crypto_kem_enc,
-         kyber1024_crypto_kem_dec},
     };
 
     kem_stats_t kyber_stats[sizeof(kyber_targets) / sizeof(kyber_targets[0])];
@@ -640,24 +490,16 @@ int main(int argc, char **argv) {
     microbench_sampling(micro_trials);
     microbench_sha3(micro_trials);
 
+    print_combined_table(
 #ifdef WSIDH_ENABLE_KYBER
-    print_combined_table("KEM Cycle/Size Table",
-                         wsidh_rows, 1,
-                         kyber_table,
-                         kyber_count);
+        "KEM Cycle/Size Table",
 #else
-    print_combined_table("KEM Cycle/Size Table (scalar)",
-                         wsidh_rows, 1,
-                         kyber_table,
-                         kyber_count);
+        "KEM Cycle/Size Table (scalar)",
 #endif
-
-    if (!summary_mode && variants_mode && !variant_child_mode) {
-        int vrc = run_variant_script(trials);
-        if (vrc != 0) {
-            return vrc;
-        }
-    }
+        wsidh_rows,
+        1,
+        kyber_table,
+        kyber_count);
 
     return 0;
 }

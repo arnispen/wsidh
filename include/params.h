@@ -14,6 +14,9 @@
 #define WSIDH_N WSIDH_PARAM_N
 #define WSIDH_Q WSIDH_PARAM_Q
 
+#define WSIDH_MONT_R    2285
+#define WSIDH_MONT_RINV 169
+
 // Secrets/noise sample from [-BOUND, +BOUND]; keep bounds tight for low noise.
 #define WSIDH_BOUND_S WSIDH_PARAM_BOUND_S
 #define WSIDH_BOUND_E WSIDH_PARAM_BOUND_E
