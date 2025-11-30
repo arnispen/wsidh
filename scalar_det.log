@@ -1,0 +1,5 @@
+WSIDH512 parameters: N=256 q=3329 bound_s=3 bound_e=2
+pk=768 bytes, sk=1344 bytes, ct=768 bytes, ss=32 bytes
+ss_enc = 9ea600fbcba58431b4c6c8af9bff1f687faaf0b2403f28155281c7fe06064339
+ss_dec = b8a53499801b774cd49eeb37b4491c7830714cf621eb2b8958e1834ba44b2dfa
+Round-trip correctness: FAIL

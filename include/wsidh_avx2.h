@@ -9,7 +9,6 @@ void wsidh_avx2_invntt(int16_t *coeffs);
 void wsidh_avx2_basemul(int16_t *r,
                         const int16_t *a,
                         const int16_t *b);
-void wsidh_avx2_reduce(int16_t *coeffs);
 
 #endif /* WSIDH_USE_AVX2 */
 
