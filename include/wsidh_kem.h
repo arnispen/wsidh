@@ -18,7 +18,8 @@
  */
 #define WSIDH_POLY_BYTES   (2 * WSIDH_N)
 #define WSIDH_POLY_COMPRESSED_BYTES ((WSIDH_N * 12) / 8)
-#define WSIDH_PK_BYTES     (2 * WSIDH_POLY_COMPRESSED_BYTES)   // b || b_ntt
+#define WSIDH_PK_BYTES     (WSIDH_SEED_BYTES + \
+                            2 * WSIDH_POLY_COMPRESSED_BYTES)   // seed_a || b || b_ntt
 #define WSIDH_CT_BYTES     (2 * WSIDH_POLY_COMPRESSED_BYTES)   // compressed u || v
 #define WSIDH_SS_BYTES     32
 

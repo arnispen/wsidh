@@ -16,17 +16,13 @@
 #include WSIDH_AVX2_HEADER(fips202x4.h)
 #endif
 
-static void ensure_cached_wave(void);
-static void cached_wave_poly(poly *a_out);
-static poly cached_wave_time;
-static alignas(32) int16_t cached_wave_ntt[WSIDH_N];
-static int cached_wave_ready = 0;
 #define WSIDH_MAX_HASH_INPUT (WSIDH_CT_BYTES + WSIDH_SK_Z_BYTES + WSIDH_SS_BYTES + 4)
 #define WSIDH_COINS_DOMAIN 0x5A
 #define WSIDH_KDF_DOMAIN_GOOD 0xA0
 #define WSIDH_KDF_DOMAIN_BAD  0xA1
 #define WSIDH_KDF_DOMAIN_DUMMY0 0x7C
 #define WSIDH_KDF_DOMAIN_DUMMY1 0xA3
+#define WSIDH_A_SEED_DOMAIN 0xB7
 #ifdef WSIDH_USE_AVX2
 #define WSIDH_MAX_SAMPLE_BYTES \
     ((((2 * WSIDH_N) + SHAKE128_RATE - 1) / SHAKE128_RATE) * SHAKE128_RATE)
@@ -54,6 +50,14 @@ static int cached_wave_ready = 0;
 #define SK_PK_OFFSET         (SK_SNTT_OFFSET + WSIDH_SK_SNTT_BYTES)
 #define SK_PK_HASH_OFFSET    (SK_PK_OFFSET + WSIDH_PK_BYTES)
 #define SK_Z_OFFSET          (SK_PK_HASH_OFFSET + WSIDH_PK_HASH_BYTES)
+
+#define PK_ASEED_OFFSET      0
+#define PK_B_OFFSET          (PK_ASEED_OFFSET + WSIDH_SEED_BYTES)
+#define PK_BNTT_OFFSET       (PK_B_OFFSET + WSIDH_POLY_COMPRESSED_BYTES)
+
+#if (PK_BNTT_OFFSET + WSIDH_POLY_COMPRESSED_BYTES != WSIDH_PK_BYTES)
+#error "PK layout mismatch"
+#endif
 
 #if (WSIDH_SK_BYTES != (WSIDH_SK_S_BYTES + WSIDH_SK_SNTT_BYTES + \
                         WSIDH_PK_BYTES + WSIDH_PK_HASH_BYTES + WSIDH_SK_Z_BYTES))
@@ -94,6 +98,8 @@ static inline rand_func_t wsidh_get_rng(void) {
 /* ============================================================
    Serialization helpers
    ============================================================ */
+static void poly_ntt_from_poly(int16_t out[WSIDH_N], const poly *in);
+
 static void poly_to_bytes(uint8_t *out, const poly *p) {
     WSIDH_PROFILE_BEGIN(poly_to_bytes_scope, WSIDH_PROFILE_EVENT_SERIALIZE);
     for (int i = 0; i < WSIDH_N; i++) {
@@ -252,6 +258,59 @@ static void wsidh_hash_pk_cached(uint8_t *out, const uint8_t *pk) {
 }
 #endif
 
+typedef struct {
+    uint8_t seed[WSIDH_SEED_BYTES];
+    poly a_time;
+    alignas(32) int16_t a_ntt[WSIDH_N];
+    atomic_flag lock;
+    int valid;
+    int a_time_ready;
+} wsidh_a_cache_t;
+
+static wsidh_a_cache_t g_wsidh_a_cache = {
+    .lock = ATOMIC_FLAG_INIT,
+    .valid = 0,
+    .a_time_ready = 0,
+};
+
+static void wsidh_load_a_cached(poly *a_out,
+                                poly *a_ntt_out,
+                                const uint8_t *seed) {
+    if (!seed || (!a_out && !a_ntt_out)) {
+        return;
+    }
+    while (atomic_flag_test_and_set_explicit(&g_wsidh_a_cache.lock,
+                                             memory_order_acquire)) {
+        ;
+    }
+    if (!g_wsidh_a_cache.valid ||
+        memcmp(g_wsidh_a_cache.seed, seed, WSIDH_SEED_BYTES) != 0) {
+        poly_sample_uniform_ntt_from_seed(g_wsidh_a_cache.a_ntt,
+                                          seed,
+                                          WSIDH_A_SEED_DOMAIN);
+        memcpy(g_wsidh_a_cache.seed, seed, WSIDH_SEED_BYTES);
+        g_wsidh_a_cache.valid = 1;
+        g_wsidh_a_cache.a_time_ready = 0;
+    }
+    if (a_out) {
+        if (!g_wsidh_a_cache.a_time_ready) {
+            memcpy(g_wsidh_a_cache.a_time.coeffs,
+                   g_wsidh_a_cache.a_ntt,
+                   sizeof(g_wsidh_a_cache.a_ntt));
+            inv_ntt(g_wsidh_a_cache.a_time.coeffs);
+            poly_canon(&g_wsidh_a_cache.a_time);
+            g_wsidh_a_cache.a_time_ready = 1;
+        }
+        *a_out = g_wsidh_a_cache.a_time;
+    }
+    if (a_ntt_out) {
+        for (int i = 0; i < WSIDH_N; i++) {
+            a_ntt_out->coeffs[i] = g_wsidh_a_cache.a_ntt[i];
+        }
+    }
+    atomic_flag_clear_explicit(&g_wsidh_a_cache.lock, memory_order_release);
+}
+
 static void load_pk(const uint8_t *pk,
                     poly *a,
                     poly *b,
@@ -260,31 +319,40 @@ static void load_pk(const uint8_t *pk,
                     const uint8_t *pk_hash_opt) {
     WSIDH_PROFILE_BEGIN(load_pk_scope, WSIDH_PROFILE_EVENT_DESERIALIZE);
     (void)pk_hash_opt;
-    cached_wave_poly(a);
+    if (!pk) {
+        WSIDH_PROFILE_END(load_pk_scope);
+        return;
+    }
+
+    if (a || a_ntt) {
+        wsidh_load_a_cached(a ? a : NULL,
+                            a_ntt ? a_ntt : NULL,
+                            pk + PK_ASEED_OFFSET);
+    }
+
     if (b) {
-        poly_decompress12(b, pk);
+        poly_decompress12(b, pk + PK_B_OFFSET);
     }
     if (b_ntt) {
-        poly_decompress12(b_ntt, pk + WSIDH_POLY_COMPRESSED_BYTES);
-    }
-    if (a_ntt) {
-        ensure_cached_wave();
-        for (int i = 0; i < WSIDH_N; i++) {
-            a_ntt->coeffs[i] = cached_wave_ntt[i];
-        }
+        poly_decompress12(b_ntt, pk + PK_BNTT_OFFSET);
     }
     WSIDH_PROFILE_END(load_pk_scope);
 }
 
-static void store_pk(uint8_t *pk, const poly *a, const poly *b, const poly *b_ntt) {
+static void store_pk(uint8_t *pk,
+                     const uint8_t *a_seed,
+                     const poly *b,
+                     const poly *b_ntt) {
     WSIDH_PROFILE_BEGIN(store_pk_scope, WSIDH_PROFILE_EVENT_SERIALIZE);
-    (void)a;
+    if (a_seed) {
+        memcpy(pk + PK_ASEED_OFFSET, a_seed, WSIDH_SEED_BYTES);
+    }
     poly canonical_b = *b;
     poly_canon(&canonical_b);
-    poly_compress12(pk, &canonical_b);
+    poly_compress12(pk + PK_B_OFFSET, &canonical_b);
     poly canonical_ntt = *b_ntt;
     poly_canon(&canonical_ntt);
-    poly_compress12(pk + WSIDH_POLY_COMPRESSED_BYTES, &canonical_ntt);
+    poly_compress12(pk + PK_BNTT_OFFSET, &canonical_ntt);
     WSIDH_PROFILE_END(store_pk_scope);
 }
 
@@ -320,29 +388,6 @@ static void poly_mul_from_ntt_arrays(poly *out,
         out->coeffs[i] = result_ntt[i];
     }
     poly_canon(out);
-}
-
-static void ensure_cached_wave(void) {
-    if (cached_wave_ready) return;
-    poly_from_wave(&cached_wave_time);
-    poly_canon(&cached_wave_time);
-    for (int i = 0; i < WSIDH_N; i++) {
-        cached_wave_ntt[i] = cached_wave_time.coeffs[i];
-    }
-    ntt(cached_wave_ntt);
-    cached_wave_ready = 1;
-}
-
-static void cached_wave_poly(poly *a_out) {
-    ensure_cached_wave();
-    *a_out = cached_wave_time;
-}
-
-static int poly_is_cached_wave(const poly *candidate) {
-    ensure_cached_wave();
-    return memcmp(candidate->coeffs,
-                  cached_wave_time.coeffs,
-                  sizeof(cached_wave_time.coeffs)) == 0;
 }
 
 static void poly_mul_with_ntt_array_from_ntt(poly *out,
@@ -727,17 +772,15 @@ static void wsidh_encrypt(poly *u,
     int need_a_fallback = 0;
     int need_b_fallback = 0;
 
-    if (poly_is_cached_wave(a)) {
-        a_ntt_ptr = cached_wave_ntt;
-    } else if (a_ntt_opt) {
+    if (a_ntt_opt) {
         a_ntt_ptr = a_ntt_opt->coeffs;
-    } else {
+    } else if (a) {
         need_a_fallback = 1;
     }
 
     if (b_ntt_opt) {
         b_ntt_ptr = b_ntt_opt->coeffs;
-    } else {
+    } else if (b) {
         need_b_fallback = 1;
     }
 
@@ -792,17 +835,20 @@ static void wsidh_decrypt(poly *out,
    ============================================================ */
 int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     WSIDH_PROFILE_BEGIN(keygen_scope, WSIDH_PROFILE_EVENT_KEYGEN);
-    poly a, b, s, e;
+    poly b, s, e;
     poly b_ntt_poly;
     poly s_ntt_poly;
+    alignas(32) int16_t a_ntt_arr[WSIDH_N];
     alignas(32) int16_t s_ntt_arr[WSIDH_N];
     alignas(32) int16_t e_ntt_arr[WSIDH_N];
     alignas(32) int16_t b_ntt_arr[WSIDH_N];
     alignas(32) int16_t b_time_arr[WSIDH_N];
     rand_func_t rng = wsidh_get_rng();
     uint8_t noise_seed[WSIDH_SEED_BYTES];
+    uint8_t a_seed[WSIDH_SEED_BYTES];
 
-    cached_wave_poly(&a);
+    rng(a_seed, sizeof(a_seed));
+    poly_sample_uniform_ntt_from_seed(a_ntt_arr, a_seed, WSIDH_A_SEED_DOMAIN);
 
     rng(noise_seed, sizeof(noise_seed));
     const wsidh_params_t *params = wsidh_params_active();
@@ -812,13 +858,17 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
                           &e, bound_e,
                           noise_seed, 0x50);
 
-    poly_ntt_from_poly(s_ntt_arr, &s);
-    poly_ntt_from_poly(e_ntt_arr, &e);
+    for (int i = 0; i < WSIDH_N; i++) {
+        s_ntt_arr[i] = s.coeffs[i];
+        e_ntt_arr[i] = e.coeffs[i];
+    }
+    int16_t *ntt_vecs[2] = {s_ntt_arr, e_ntt_arr};
+    ntt_batch(ntt_vecs, 2);
     for (int i = 0; i < WSIDH_N; i++) {
         s_ntt_poly.coeffs[i] = s_ntt_arr[i];
     }
 
-    basemul(b_ntt_arr, cached_wave_ntt, s_ntt_arr);
+    basemul(b_ntt_arr, a_ntt_arr, s_ntt_arr);
     for (int i = 0; i < WSIDH_N; i++) {
         int32_t sum = (int32_t)b_ntt_arr[i] + e_ntt_arr[i];
         if (sum >= WSIDH_Q) sum -= WSIDH_Q;
@@ -837,7 +887,7 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     }
     poly_canon(&b_ntt_poly);
 
-    store_pk(pk, &a, &b, &b_ntt_poly);
+    store_pk(pk, a_seed, &b, &b_ntt_poly);
     poly_small_pack(sk + SK_S_OFFSET, &s);
     poly_canon(&s_ntt_poly);
     poly_compress12(sk + SK_SNTT_OFFSET, &s_ntt_poly);
@@ -852,7 +902,7 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
 
 int wsidh_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
     WSIDH_PROFILE_BEGIN(enc_scope, WSIDH_PROFILE_EVENT_ENCAPS);
-    poly a, b, u, v, a_ntt_poly, b_ntt_poly;
+    poly b, u, v, a_ntt_poly, b_ntt_poly;
     uint8_t msg[WSIDH_SS_BYTES];
     uint8_t coins[WSIDH_SEED_BYTES];
     uint8_t pk_hash_local[WSIDH_PK_HASH_BYTES];
@@ -863,12 +913,12 @@ int wsidh_crypto_kem_enc(uint8_t *ct, uint8_t *ss, const uint8_t *pk) {
     }
 
     wsidh_hash_pk_cached(pk_hash_local, pk);
-    load_pk(pk, &a, &b, &a_ntt_poly, &b_ntt_poly, pk_hash_local);
+    load_pk(pk, NULL, &b, &a_ntt_poly, &b_ntt_poly, pk_hash_local);
 
     rng(msg, sizeof(msg));
     coins_from_msg(coins, msg, pk_hash_local);
 
-    wsidh_encrypt(&u, &v, &a, &b, &a_ntt_poly, &b_ntt_poly, msg, coins);
+    wsidh_encrypt(&u, &v, NULL, &b, &a_ntt_poly, &b_ntt_poly, msg, coins);
     store_ct(ct, &u, &v);
 
     hash_key_from_parts(ss, ct, msg, sizeof(msg), WSIDH_KDF_DOMAIN_GOOD);
@@ -884,7 +934,7 @@ int wsidh_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
 
     poly u, v, s, diff_poly, s_ntt_poly;
     alignas(32) int16_t s_ntt_arr[WSIDH_N];
-    poly a_re, b_re, u_re, v_re, a_ntt_re, b_ntt_re;
+    poly b_re, u_re, v_re, a_ntt_re, b_ntt_re;
     uint8_t msg_prime[WSIDH_SS_BYTES];
     uint8_t coins[WSIDH_SEED_BYTES];
 
@@ -897,14 +947,14 @@ int wsidh_crypto_kem_dec(uint8_t *ss, const uint8_t *ct, const uint8_t *sk) {
 
     const uint8_t *pk_cached = sk + SK_PK_OFFSET;
     const uint8_t *pk_hash_cached = sk + SK_PK_HASH_OFFSET;
-    load_pk(pk_cached, &a_re, &b_re, &a_ntt_re, &b_ntt_re, pk_hash_cached);
+    load_pk(pk_cached, NULL, &b_re, &a_ntt_re, &b_ntt_re, pk_hash_cached);
 
     wsidh_decrypt(&diff_poly, &u, &v, &s, s_ntt_arr);
     poly_to_msg(msg_prime, &diff_poly);
 
     coins_from_msg(coins, msg_prime, pk_hash_cached);
     WSIDH_PROFILE_BEGIN(fo_reenc_scope, WSIDH_PROFILE_EVENT_FO_REENC);
-    wsidh_encrypt(&u_re, &v_re, &a_re, &b_re, &a_ntt_re, &b_ntt_re, msg_prime, coins);
+    wsidh_encrypt(&u_re, &v_re, NULL, &b_re, &a_ntt_re, &b_ntt_re, msg_prime, coins);
     WSIDH_PROFILE_END(fo_reenc_scope);
 
     uint32_t diff = poly_diff(&u, &u_re);

@@ -255,7 +255,12 @@ void poly_sample_small_from_seed(poly *a,
                                  int bound,
                                  uint8_t domain_sep);
 
-void poly_from_wave(poly *a);
+void poly_sample_uniform_q_from_seed(poly *a,
+                                     const uint8_t seed[WSIDH_SEED_BYTES],
+                                     uint8_t domain_sep);
+void poly_sample_uniform_ntt_from_seed(int16_t out[WSIDH_N],
+                                       const uint8_t seed[WSIDH_SEED_BYTES],
+                                       uint8_t domain_sep);
 void poly_print_csv(const poly *a, const char *label);
 
 void poly_canon(poly *p);
