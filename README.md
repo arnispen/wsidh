@@ -65,7 +65,7 @@ WSIDH works over the cyclotomic ring `R_q = Z_q[x]/(x^N + 1)` with `N = 2^k` so 
 
 ### Public polynomial sampling
 
-WSIDH now draws the generator polynomial `a(x)` uniformly at random from `R_q` by expanding a 32-byte seed through SHAKE128 until enough unbiased 16-bit samples land below `q`. That seed is stored at the beginning of the public key so that every caller deterministically reconstructs both `a` and its NTT without touching entropy sources, yet the distribution matches the uniform RLWE setting instead of a structured wave.
+WSIDH now draws the generator polynomial `a(x)` uniformly at random from `R_q` by expanding a 32-byte seed through SHAKE128 until enough unbiased 16-bit samples land below `q`, then adds the precomputed sinusoidal wave (in the NTT domain) as a fixed offset. Because adding a constant in a finite field preserves uniformity, the resulting `a(x)` keeps Kyber’s uniform security guarantees while retaining the sinusoidal “WSIDH signature.” That seed is stored at the beginning of the public key so that every caller deterministically reconstructs both `a` and its NTT without touching entropy sources.
 
 ### RLWE equations
 
@@ -88,7 +88,7 @@ We implement Fujisaki–Okamoto over this CPA scheme by hashing a 32-byte messag
 
 ## High-Level KEM Flow
 
-1. **KeyGen:** pick a fresh 32-byte seed, expand it into uniform `a(x)`, sample `s` and `e`, then publish `seed_a` plus `(b=a·s+e)` serialized into `pk`. Secret key stores `s`, `pk`, `H(pk)`, and a 32-byte random fallback `z`.
+1. **KeyGen:** pick a fresh 32-byte seed, expand it into a uniform `a(x)` (then add the sinusoidal offset), sample `s` and `e`, then publish `seed_a` plus `(b=a·s+e)` serialized into `pk`. Secret key stores `s`, `pk`, `H(pk)`, and a 32-byte random fallback `z`.
 2. **Encaps:** Sample 32-byte message `m`, derive coins `SHA3-256(m || pk)`, deterministically expand `(r, e1, e2)` via domain-separated samplers, and produce `(u, v)` plus shared secret `K = SHA3-256(m || ct)`.
 3. **Decaps:** Reconstruct `m'` from `v - u·s`, re-encrypt using `coins' = SHA3-256(m' || pk)`, compare `(u', v')` to `(u, v)` in constant time, and choose between `SHA3-256(m' || ct)` and `SHA3-256(z || ct)` without branches.
 
