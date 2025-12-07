@@ -108,6 +108,36 @@ static void sample_uniform_coeffs_portable(int16_t *coeffs,
 }
 #endif
 
+static inline int16_t wsidh_mod_q_int32(int32_t x) {
+    x %= WSIDH_Q;
+    if (x < 0) x += WSIDH_Q;
+    return (int16_t)x;
+}
+
+static const int16_t *wsidh_wave_table_time(void) {
+    const wsidh_params_t *params = wsidh_params_active();
+    if (!params || !params->wave_table ||
+        params->wave_table_len != (size_t)WSIDH_N) {
+        return NULL;
+    }
+    return params->wave_table;
+}
+
+static const int16_t *wsidh_wave_table_ntt(void) {
+    static alignas(32) int16_t wave_ntt[WSIDH_N];
+    static int wave_ready = 0;
+    const int16_t *wave_time = wsidh_wave_table_time();
+    if (!wave_time) {
+        return NULL;
+    }
+    if (!wave_ready) {
+        memcpy(wave_ntt, wave_time, sizeof(wave_ntt));
+        ntt(wave_ntt);
+        wave_ready = 1;
+    }
+    return wave_ntt;
+}
+
 #ifdef WSIDH_USE_AVX2
 static void sample_uniform_coeffs_avx(int16_t *coeffs,
                                       const uint8_t seed[WSIDH_SEED_BYTES],
@@ -179,6 +209,12 @@ void poly_sample_uniform_q_from_seed(poly *a,
     WSIDH_PROFILE_BEGIN(public_poly, WSIDH_PROFILE_EVENT_POLY_SAMPLE_UNIFORM);
     alignas(32) int16_t tmp[WSIDH_N];
     sample_uniform_coeffs(tmp, seed, domain_sep);
+    const int16_t *wave_ntt = wsidh_wave_table_ntt();
+    if (wave_ntt) {
+        for (int i = 0; i < WSIDH_N; i++) {
+            tmp[i] = wsidh_mod_q_int32((int32_t)tmp[i] + wave_ntt[i]);
+        }
+    }
     memcpy(a->coeffs, tmp, sizeof(tmp));
     inv_ntt(a->coeffs);
     poly_canon(a);
@@ -190,6 +226,12 @@ void poly_sample_uniform_ntt_from_seed(int16_t out[WSIDH_N],
                                        uint8_t domain_sep) {
     WSIDH_PROFILE_BEGIN(public_poly_ntt, WSIDH_PROFILE_EVENT_POLY_SAMPLE_UNIFORM);
     sample_uniform_coeffs(out, seed, domain_sep);
+    const int16_t *wave_ntt = wsidh_wave_table_ntt();
+    if (wave_ntt) {
+        for (int i = 0; i < WSIDH_N; i++) {
+            out[i] = wsidh_mod_q_int32((int32_t)out[i] + wave_ntt[i]);
+        }
+    }
     WSIDH_PROFILE_END(public_poly_ntt);
 }
 

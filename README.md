@@ -166,20 +166,20 @@ prints the CPU brand string, compiler, and the exact `BUILD_FLAGS` string taken
 from `CFLAGS`, so the numbers below are fully reproducible.
 
 Latest AVX2 run (MacBook Pro, Intel(R) Core(TM) i5-8257U @ 1.40GHz,
-Apple LLVM 14.0.3, `-O3 -march=native -fomit-frame-pointer`, `./wsidh_bench 1000000`)
+Apple LLVM 14.0.3, `-O3 -march=native -fomit-frame-pointer`, `./wsidh_bench 100000`)
 produced:
 
 | Scheme   | pk/sk/ct (bytes) | keygen avg (cycles) | encaps avg (cycles) | decaps avg (cycles) |
 |----------|-----------------:|--------------------:|---------------------:|--------------------:|
-| WSIDH512 | 800 / 1376 / 768 | 12,449.08 | 12,774.37 | 14,490.55 |
-| Kyber512 | 800 / 1632 / 768 | 14,364.75 | 15,216.00 | 16,136.38 |
+| WSIDH512 | 800 / 1376 / 768 | 12,309.22 | 12,351.91 | 14,037.89 |
+| Kyber512 | 800 / 1632 / 768 | 13,108.77 | 13,903.94 | 16,056.60 |
 
 Thanks to the Kyber-style AVX2 rejection sampler we now feed keygen directly with
-NTT-domain uniforms, shaving ~3k cycles off the hot path. WSIDH512 wins decisively
-across key generation (≈15% faster), encapsulation (≈16% faster), and decapsulation
-(≈10% faster) while still shipping the smaller public/secret keys. Re-run
-`make bench_all WITH_AVX2=1` after any hot-path change so the README stays aligned
-with real measurements.
+NTT-domain uniforms (before adding the sinusoidal bias), so even the shorter 100k
+trial run shows WSIDH512 ahead across key generation (≈6% faster), encapsulation
+(≈11% faster), and decapsulation (≈13% faster) while still shipping the smaller
+public/secret keys. Re-run `make bench_all WITH_AVX2=1` after any hot-path change so
+the README stays aligned with real measurements.
 ## Notes & TODOs
 
 - `poly.c` retains straightforward arithmetic; once functionality stabilizes we can swap in Montgomery reductions or precomputed tables.
