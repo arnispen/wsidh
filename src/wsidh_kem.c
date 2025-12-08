@@ -276,11 +276,9 @@ static void wsidh_expand_a_from_seed(poly *a_time,
                                      const uint8_t seed[WSIDH_SEED_BYTES],
                                      uint8_t domain_sep) {
     if (!seed) return;
-    poly uniform_poly;
-    poly_sample_uniform_q_from_seed(&uniform_poly, seed, domain_sep);
     alignas(32) int16_t local_ntt[WSIDH_N];
     int16_t *target_ntt = a_ntt_out ? a_ntt_out : local_ntt;
-    poly_ntt_from_poly(target_ntt, &uniform_poly);
+    poly_sample_uniform_ntt_from_seed(target_ntt, seed, domain_sep);
     const int16_t *wave_mask = wsidh_wave_ntt_mask();
     if (wave_mask) {
         for (int i = 0; i < WSIDH_N; i++) {

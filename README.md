@@ -65,7 +65,7 @@ WSIDH works over the cyclotomic ring `R_q = Z_q[x]/(x^N + 1)` with `N = 2^k` so 
 
 ### Public polynomial sampling
 
-WSIDH now draws the generator polynomial `a(x)` uniformly at random from `R_q` by expanding a 32-byte seed through SHAKE128 until enough unbiased 16-bit samples land below `q`, then adds the precomputed sinusoidal wave (in the NTT domain) as a fixed offset. Because adding a constant in a finite field preserves uniformity, the resulting `a(x)` keeps Kyber’s uniform security guarantees while retaining the sinusoidal “WSIDH signature.” That seed is stored at the beginning of the public key so that every caller deterministically reconstructs both `a` and its NTT without touching entropy sources.
+WSIDH now draws the generator polynomial `a(x)` uniformly at random from `R_q` by expanding a 32-byte seed through SHAKE128 until enough unbiased 16-bit samples land below `q`, then adds the precomputed sinusoidal wave (in the NTT domain) as a fixed offset. Because adding a constant in a finite field preserves uniformity, the resulting `a(x)` keeps Kyber’s uniform security guarantees while retaining the sinusoidal “WSIDH signature.” That seed is stored at the beginning of the public key so that every caller deterministically reconstructs both `a` and its NTT without touching entropy sources. In practice `wsidh_expand_a_from_seed` samples the polynomial directly in the NTT domain, applies the public wave mask, caches `a_ntt`, and only performs an inverse NTT when an actual time-domain `a(x)` is requested so key generation never pays an extra transform.
 
 ### RLWE equations
 
@@ -171,13 +171,13 @@ produced:
 
 | Scheme   | pk/sk/ct (bytes) | keygen avg (cycles) | encaps avg (cycles) | decaps avg (cycles) |
 |----------|-----------------:|--------------------:|---------------------:|--------------------:|
-| WSIDH512 | 800 / 1376 / 768 | 12,309.22 | 12,351.91 | 14,037.89 |
-| Kyber512 | 800 / 1632 / 768 | 13,108.77 | 13,903.94 | 16,056.60 |
+| WSIDH512 | 800 / 1376 / 768 | 12,733.80 | 12,633.19 | 14,730.08 |
+| Kyber512 | 800 / 1632 / 768 | 13,596.68 | 14,427.49 | 16,230.25 |
 
 Thanks to the Kyber-style AVX2 rejection sampler we now feed keygen directly with
 NTT-domain uniforms (before adding the sinusoidal bias), so even the shorter 100k
 trial run shows WSIDH512 ahead across key generation (≈6% faster), encapsulation
-(≈11% faster), and decapsulation (≈13% faster) while still shipping the smaller
+(≈12% faster), and decapsulation (≈9% faster) while still shipping the smaller
 public/secret keys. Re-run `make bench_all WITH_AVX2=1` after any hot-path change so
 the README stays aligned with real measurements.
 ## Notes & TODOs
