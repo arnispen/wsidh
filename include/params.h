@@ -21,6 +21,10 @@
 #define WSIDH_BOUND_S WSIDH_PARAM_BOUND_S
 #define WSIDH_BOUND_E WSIDH_PARAM_BOUND_E
 
+#ifndef WSIDH_WAVE_LAMBDA
+#define WSIDH_WAVE_LAMBDA 1
+#endif
+
 #define WSIDH_SEED_BYTES 32    // seed size for deterministic samplers / FO transform
 
 typedef void (*rand_func_t)(uint8_t *out, size_t outlen);
@@ -42,5 +46,6 @@ typedef struct {
 const wsidh_params_t *wsidh_params_active(void);
 void wsidh_params_select(const wsidh_params_t *params);
 void wsidh_params_reset(void);
+const int16_t *wsidh_wave_ntt_mask(void);
 
 #endif // WSIDH_PARAMS_H

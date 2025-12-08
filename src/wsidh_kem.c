@@ -264,14 +264,41 @@ typedef struct {
     alignas(32) int16_t a_ntt[WSIDH_N];
     atomic_flag lock;
     int valid;
-    int a_time_ready;
 } wsidh_a_cache_t;
 
 static wsidh_a_cache_t g_wsidh_a_cache = {
     .lock = ATOMIC_FLAG_INIT,
     .valid = 0,
-    .a_time_ready = 0,
 };
+
+static void wsidh_expand_a_from_seed(poly *a_time,
+                                     int16_t a_ntt_out[WSIDH_N],
+                                     const uint8_t seed[WSIDH_SEED_BYTES],
+                                     uint8_t domain_sep) {
+    if (!seed) return;
+    poly uniform_poly;
+    poly_sample_uniform_q_from_seed(&uniform_poly, seed, domain_sep);
+    alignas(32) int16_t local_ntt[WSIDH_N];
+    int16_t *target_ntt = a_ntt_out ? a_ntt_out : local_ntt;
+    poly_ntt_from_poly(target_ntt, &uniform_poly);
+    const int16_t *wave_mask = wsidh_wave_ntt_mask();
+    if (wave_mask) {
+        for (int i = 0; i < WSIDH_N; i++) {
+            int32_t val = (int32_t)target_ntt[i] +
+                          (int32_t)WSIDH_WAVE_LAMBDA * wave_mask[i];
+            target_ntt[i] = wsidh_mod_q(val);
+        }
+    }
+    if (a_time) {
+        alignas(32) int16_t tmp_time[WSIDH_N];
+        memcpy(tmp_time, target_ntt, sizeof(tmp_time));
+        inv_ntt(tmp_time);
+        for (int i = 0; i < WSIDH_N; i++) {
+            a_time->coeffs[i] = tmp_time[i];
+        }
+        poly_canon(a_time);
+    }
+}
 
 static void wsidh_load_a_cached(poly *a_out,
                                 poly *a_ntt_out,
@@ -285,22 +312,14 @@ static void wsidh_load_a_cached(poly *a_out,
     }
     if (!g_wsidh_a_cache.valid ||
         memcmp(g_wsidh_a_cache.seed, seed, WSIDH_SEED_BYTES) != 0) {
-        poly_sample_uniform_ntt_from_seed(g_wsidh_a_cache.a_ntt,
-                                          seed,
-                                          WSIDH_A_SEED_DOMAIN);
+        wsidh_expand_a_from_seed(&g_wsidh_a_cache.a_time,
+                                 g_wsidh_a_cache.a_ntt,
+                                 seed,
+                                 WSIDH_A_SEED_DOMAIN);
         memcpy(g_wsidh_a_cache.seed, seed, WSIDH_SEED_BYTES);
         g_wsidh_a_cache.valid = 1;
-        g_wsidh_a_cache.a_time_ready = 0;
     }
     if (a_out) {
-        if (!g_wsidh_a_cache.a_time_ready) {
-            memcpy(g_wsidh_a_cache.a_time.coeffs,
-                   g_wsidh_a_cache.a_ntt,
-                   sizeof(g_wsidh_a_cache.a_ntt));
-            inv_ntt(g_wsidh_a_cache.a_time.coeffs);
-            poly_canon(&g_wsidh_a_cache.a_time);
-            g_wsidh_a_cache.a_time_ready = 1;
-        }
         *a_out = g_wsidh_a_cache.a_time;
     }
     if (a_ntt_out) {
@@ -848,7 +867,7 @@ int wsidh_crypto_kem_keypair(uint8_t *pk, uint8_t *sk) {
     uint8_t a_seed[WSIDH_SEED_BYTES];
 
     rng(a_seed, sizeof(a_seed));
-    poly_sample_uniform_ntt_from_seed(a_ntt_arr, a_seed, WSIDH_A_SEED_DOMAIN);
+    wsidh_expand_a_from_seed(NULL, a_ntt_arr, a_seed, WSIDH_A_SEED_DOMAIN);
 
     rng(noise_seed, sizeof(noise_seed));
     const wsidh_params_t *params = wsidh_params_active();

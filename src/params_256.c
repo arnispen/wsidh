@@ -28,6 +28,8 @@ static const int16_t wsidh_wave_table_256[WSIDH_N] = {
     1834,1856,1880,1905,1931,1958,1986,2015,2045,2075,2107,2138,2170,2203,2236,2269
 };
 
+static const int16_t wsidh_wave_ntt_mask_256[WSIDH_N] = {0};
+
 static const int16_t wsidh_ntt_zetas_fwd_256[] = {
     3328, 1729, 2580, 2642, 1062, 296, 289, 17
 };
@@ -69,4 +71,8 @@ void wsidh_params_select(const wsidh_params_t *params) {
 
 void wsidh_params_reset(void) {
     g_wsidh_params = &WSIDH_PARAMS_256;
+}
+
+const int16_t *wsidh_wave_ntt_mask(void) {
+    return wsidh_wave_ntt_mask_256;
 }
